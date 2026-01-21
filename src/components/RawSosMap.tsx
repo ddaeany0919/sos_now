@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
 import { useSosStore } from '@/store/useSosStore';
 import { supabase } from '@/lib/supabase';
+import { getPharmacyStatus } from '@/lib/businessHours';
 
 declare global {
     interface Window {
@@ -37,7 +38,7 @@ export default function RawSosMap() {
         const mapOptions = {
             center: location,
             zoom: 14,
-            minZoom: 10,
+            minZoom: 7,
             maxZoom: 19,
             zoomControl: true,
             zoomControlOptions: {
@@ -109,11 +110,16 @@ export default function RawSosMap() {
             icon = '🏥';
             label = item.beds_available.toString();
         } else if (selectedCategory === 'PHARMACY') {
-            color = '#10B981';
-            icon = '💊';
+            const status = getPharmacyStatus(item);
+            color = status.color;
+            icon = status.icon;
+            if (status.status === 'open') {
+                label = '';
+            }
         } else if (selectedCategory === 'ANIMAL_HOSPITAL') {
-            color = '#3B82F6';
-            icon = '🐶';
+            const status = getPharmacyStatus(item);
+            color = status.color;
+            icon = status.status === 'open' ? '🐶' : '😴';
         } else if (selectedCategory === 'AED') {
             color = '#F59E0B';
             icon = '⚡';

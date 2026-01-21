@@ -1,6 +1,7 @@
 'use client';
 
 import { useSosStore } from '@/store/useSosStore';
+import { getPharmacyStatus } from '@/lib/businessHours';
 import {
     X, Phone, Navigation, Clock, AlertCircle,
     Star, Heart, MapPin, ExternalLink,
@@ -95,24 +96,46 @@ export default function SosBottomSheet() {
                         </div>
                     )}
 
-                    {selectedCategory === 'PHARMACY' && (
-                        <div className="rounded-[32px] bg-emerald-500/10 border border-emerald-500/20 p-6">
-                            <div className="flex items-center gap-2 text-emerald-700 font-black text-lg mb-4">
-                                <Clock size={20} />
-                                운영 정보
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="bg-white/40 p-4 rounded-2xl border border-white/20">
-                                    <p className="text-[10px] font-black text-emerald-600/50 uppercase tracking-widest mb-1">영업 상태</p>
-                                    <p className="text-lg font-black text-emerald-700">영업 중</p>
+                    {selectedCategory === 'PHARMACY' && (() => {
+                        const status = getPharmacyStatus(selectedItem);
+                        return (
+                            <div className="rounded-[32px] border p-6" style={{
+                                backgroundColor: `${status.color}10`,
+                                borderColor: `${status.color}30`
+                            }}>
+                                <div className="flex items-center gap-2 font-black text-lg mb-4" style={{ color: status.textColor }}>
+                                    <Clock size={20} />
+                                    운영 정보
                                 </div>
-                                <div className="bg-white/40 p-4 rounded-2xl border border-white/20">
-                                    <p className="text-[10px] font-black text-emerald-600/50 uppercase tracking-widest mb-1">24시간 여부</p>
-                                    <p className="text-lg font-black text-emerald-700">{selectedItem.is_24h ? 'YES' : 'NO'}</p>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="bg-white/40 p-4 rounded-2xl border border-white/20">
+                                        <p className="text-[10px] font-black uppercase tracking-widest mb-1" style={{ color: `${status.textColor}80` }}>영업 상태</p>
+                                        <p className="text-lg font-black" style={{ color: status.textColor }}>
+                                            {status.icon} {status.message}
+                                        </p>
+                                    </div>
+                                    <div className="bg-white/40 p-4 rounded-2xl border border-white/20">
+                                        <p className="text-[10px] font-black uppercase tracking-widest mb-1" style={{ color: `${status.textColor}80` }}>24시간 여부</p>
+                                        <p className="text-lg font-black" style={{ color: status.textColor }}>{selectedItem.is_24h ? 'YES' : 'NO'}</p>
+                                    </div>
                                 </div>
+                                {status.closesAt && (
+                                    <div className="mt-4 rounded-2xl bg-white/60 p-3 border border-white/20">
+                                        <p className="text-sm font-bold text-center" style={{ color: status.textColor }}>
+                                            ⏰ {status.closesAt}까지 영업
+                                        </p>
+                                    </div>
+                                )}
+                                {status.opensAt && status.status === 'closed' && (
+                                    <div className="mt-4 rounded-2xl bg-white/60 p-3 border border-white/20">
+                                        <p className="text-sm font-bold text-center" style={{ color: status.textColor }}>
+                                            🕐 {status.opensAt}에 오픈
+                                        </p>
+                                    </div>
+                                )}
                             </div>
-                        </div>
-                    )}
+                        );
+                    })()}
 
                     {selectedCategory === 'AED' && (
                         <div className="rounded-[32px] bg-amber-500/10 border border-amber-500/20 p-6">
@@ -139,14 +162,38 @@ export default function SosBottomSheet() {
                             <ShieldCheck size={18} />
                             <span className="text-[8px] font-black uppercase tracking-widest">인증됨</span>
                         </div>
-                        <div className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/40 p-3 text-slate-400 border border-white/20">
+                        <button
+                            onClick={async () => {
+                                try {
+                                    if (navigator.share) {
+                                        await navigator.share({
+                                            title: name,
+                                            text: `${name} - ${address}`,
+                                            url: `${window.location.origin}/map?lat=${selectedItem.lat}&lng=${selectedItem.lng}`
+                                        });
+                                    } else {
+                                        // Fallback: Copy to clipboard
+                                        await navigator.clipboard.writeText(`${name}\n${address}\n${window.location.origin}/map?lat=${selectedItem.lat}&lng=${selectedItem.lng}`);
+                                        alert('링크가 클립보드에 복사되었습니다!');
+                                    }
+                                } catch (err) {
+                                    console.log('Share failed:', err);
+                                }
+                            }}
+                            className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/40 p-3 text-slate-400 hover:text-slate-600 hover:bg-white/60 transition-colors border border-white/20 cursor-pointer"
+                        >
                             <Share2 size={18} />
                             <span className="text-[8px] font-black uppercase tracking-widest">공유</span>
-                        </div>
-                        <div className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/40 p-3 text-slate-400 border border-white/20">
+                        </button>
+                        <a
+                            href={`https://map.naver.com/v5/search/${encodeURIComponent(name)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/40 p-3 text-slate-400 hover:text-slate-600 hover:bg-white/60 transition-colors border border-white/20"
+                        >
                             <ExternalLink size={18} />
                             <span className="text-[8px] font-black uppercase tracking-widest">정보</span>
-                        </div>
+                        </a>
                     </div>
                 </div>
 

@@ -76,3 +76,49 @@ export async function fetchEmergencyMessages(hpid: string) {
 
     return result.response?.body?.items?.item || [];
 }
+
+/**
+ * 전국 약국 목록 조회
+ */
+export async function fetchPharmacyList(city: string = '서울특별시', district?: string) {
+    // 공공데이터포털의 실제 오퍼레이션 명칭은 'getParmacy' (h가 없음)인 경우가 많음
+    const PHARMACY_URL = 'http://apis.data.go.kr/B552657/ErmctInsttInfoInqireService/getParmacyListInfoInqire';
+    const params = new URLSearchParams();
+    if (city) params.append('Q0', city);
+    if (district) params.append('Q1', district);
+    params.append('numOfRows', '100');
+
+    const finalUrl = `${PHARMACY_URL}?serviceKey=${SERVICE_KEY}&${params.toString()}`;
+
+    console.log('Fetching Pharmacies from:', finalUrl);
+    const response = await fetch(finalUrl);
+    const xmlData = await response.text();
+    const result = parser.parse(xmlData);
+
+    const items = result.response?.body?.items?.item || [];
+    console.log(`Real API Response: Fetched ${Array.isArray(items) ? items.length : (items ? 1 : 0)} pharmacies`);
+    return items;
+}
+
+/**
+ * 전국 AED 목록 조회
+ */
+export async function fetchAEDList(city: string = '서울특별시', district?: string) {
+    // AED 서비스는 엔드포인트에 AED가 대문자이며, 오퍼레이션 명칭이 Lcinfo임
+    const AED_URL = 'http://apis.data.go.kr/B552657/AEDInfoInqireService/getAedLcinfoInqire';
+    const params = new URLSearchParams();
+    if (city) params.append('Q0', city);
+    if (district) params.append('Q1', district);
+    params.append('numOfRows', '100');
+
+    const finalUrl = `${AED_URL}?serviceKey=${SERVICE_KEY}&${params.toString()}`;
+
+    console.log('Fetching AEDs from:', finalUrl);
+    const response = await fetch(finalUrl);
+    const xmlData = await response.text();
+    const result = parser.parse(xmlData);
+
+    const items = result.response?.body?.items?.item || [];
+    console.log(`Real API Response: Fetched ${Array.isArray(items) ? items.length : (items ? 1 : 0)} AEDs`);
+    return items;
+}

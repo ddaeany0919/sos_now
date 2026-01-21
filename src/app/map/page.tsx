@@ -4,11 +4,13 @@ import { useState, useEffect } from 'react';
 import RawSosMap from '@/components/RawSosMap';
 import SosBottomSheet from '@/components/SosBottomSheet';
 import { useSosStore, CategoryType } from '@/store/useSosStore';
+import { getPharmacyStatus } from '@/lib/businessHours';
+import { sortByDistance, formatDistance } from '@/lib/distance';
 import {
     HeartPulse, Pill, Dog, ShieldAlert, Search,
     List, Map as MapIcon, AlertCircle, Star,
     MapPin, ChevronRight, Phone, Navigation,
-    X, Settings, Bell
+    X, Settings, Bell, ArrowUpDown
 } from 'lucide-react';
 
 export default function MapPage() {
@@ -21,6 +23,23 @@ export default function MapPage() {
 
     const [viewMode, setViewMode] = useState<'map' | 'list'>('map');
     const [isScrolled, setIsScrolled] = useState(false);
+    const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+    const [sortBy, setSortBy] = useState<'distance' | 'name'>('distance');
+
+    // Get user location
+    useEffect(() => {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    setUserLocation({
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    });
+                },
+                (error) => console.log('Location error:', error)
+            );
+        }
+    }, []);
 
     const categories: { id: CategoryType; label: string; icon: any; color: string; activeColor: string }[] = [
         { id: 'EMERGENCY', label: '응급실', icon: HeartPulse, color: 'text-red-500', activeColor: 'bg-red-500' },
@@ -43,6 +62,11 @@ export default function MapPage() {
             // For others, check business_hours
             if (item.is_24h) return true;
 
+            if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
+                const status = getPharmacyStatus(item);
+                return status.status === 'open' || status.status === 'closing-soon';
+            }
+
             if (item.business_hours) {
                 try {
                     const now = new Date();
@@ -64,6 +88,23 @@ export default function MapPage() {
 
         return true;
     });
+
+    // Sort items
+    const sortedItems = (() => {
+        let sorted = [...filteredItems];
+
+        if (sortBy === 'distance' && userLocation) {
+            sorted = sortByDistance(sorted, userLocation.lat, userLocation.lng);
+        } else if (sortBy === 'name') {
+            sorted.sort((a, b) => {
+                const nameA = (a.name || a.place_name || '').toLowerCase();
+                const nameB = (b.name || b.place_name || '').toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+        }
+
+        return sorted;
+    })();
 
     return (
         <div className="relative h-screen w-full overflow-hidden bg-slate-50 font-sans selection:bg-red-100 selection:text-red-600">
@@ -150,64 +191,87 @@ export default function MapPage() {
                             <div className="flex items-center justify-between px-2">
                                 <h2 className="text-2xl font-black text-slate-900">
                                     {categories.find(c => c.id === selectedCategory)?.label} 목록
-                                    <span className="ml-2 text-sm font-bold text-slate-400">{filteredItems.length}개</span>
+                                    <span className="ml-2 text-sm font-bold text-slate-400">{sortedItems.length}개</span>
                                 </h2>
-                                <button className="p-2 text-slate-400 hover:text-slate-600">
-                                    <Settings size={20} />
+                                <button
+                                    onClick={() => setSortBy(sortBy === 'distance' ? 'name' : 'distance')}
+                                    className="flex items-center gap-1 px-3 py-2 rounded-full glass text-xs font-bold text-slate-600 hover:bg-white transition-colors"
+                                >
+                                    <ArrowUpDown size={14} />
+                                    {sortBy === 'distance' ? '거리순' : '이름순'}
                                 </button>
                             </div>
 
                             {/* List Items */}
-                            {filteredItems.length > 0 ? (
+                            {sortedItems.length > 0 ? (
                                 <div className="grid gap-4">
-                                    {filteredItems.map((item) => (
-                                        <div
-                                            key={item.hp_id || item.id}
-                                            onClick={() => {
-                                                setSelectedItem(item);
-                                                setBottomSheetOpen(true);
-                                            }}
-                                            className="group relative overflow-hidden rounded-[32px] bg-white p-6 shadow-sm border border-slate-100 transition-all hover:shadow-xl hover:-translate-y-1 active:scale-[0.98] cursor-pointer"
-                                        >
-                                            <div className="flex justify-between items-start">
-                                                <div className="flex-1">
-                                                    <div className="flex items-center gap-2 mb-3">
-                                                        <h3 className="text-xl font-black text-slate-900 tracking-tight">{item.name || item.place_name}</h3>
-                                                        {item.beds_available !== undefined && (
-                                                            <span className={`px-3 py-1 rounded-full text-xs font-black ${item.beds_available > 5 ? 'bg-emerald-100 text-emerald-700' :
-                                                                item.beds_available > 0 ? 'bg-amber-100 text-amber-700' :
-                                                                    'bg-red-100 text-red-700'
-                                                                }`}>
-                                                                병상 {item.beds_available}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    <div className="space-y-2">
-                                                        <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
-                                                            <MapPin size={16} className="shrink-0 text-slate-300" />
-                                                            <span className="truncate">{item.address}</span>
-                                                        </div>
-                                                        <div className="flex gap-2">
-                                                            {item.phone && (
-                                                                <div className="flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-600">
-                                                                    <Phone size={12} />
-                                                                    {item.phone}
-                                                                </div>
+                                    {sortedItems.map((item) => {
+                                        const status = (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL')
+                                            ? getPharmacyStatus(item)
+                                            : null;
+
+                                        return (
+                                            <div
+                                                key={item.hp_id || item.id}
+                                                onClick={() => {
+                                                    setSelectedItem(item);
+                                                    setBottomSheetOpen(true);
+                                                }}
+                                                className="group relative overflow-hidden rounded-[32px] bg-white p-6 shadow-sm border border-slate-100 transition-all hover:shadow-xl hover:-translate-y-1 active:scale-[0.98] cursor-pointer"
+                                            >
+                                                <div className="flex justify-between items-start">
+                                                    <div className="flex-1">
+                                                        <div className="flex items-center gap-2 mb-3 flex-wrap">
+                                                            <h3 className="text-xl font-black text-slate-900 tracking-tight">{item.name || item.place_name}</h3>
+                                                            {item.beds_available !== undefined && (
+                                                                <span className={`px-3 py-1 rounded-full text-xs font-black ${item.beds_available > 5 ? 'bg-emerald-100 text-emerald-700' :
+                                                                    item.beds_available > 0 ? 'bg-amber-100 text-amber-700' :
+                                                                        'bg-red-100 text-red-700'
+                                                                    }`}>
+                                                                    병상 {item.beds_available}
+                                                                </span>
                                                             )}
-                                                            {item.is_24h && (
-                                                                <div className="flex items-center gap-1.5 rounded-full bg-purple-50 px-3 py-1 text-xs font-bold text-purple-600">
-                                                                    24시간
-                                                                </div>
+                                                            {status && (
+                                                                <span className="px-3 py-1 rounded-full text-xs font-black" style={{
+                                                                    backgroundColor: `${status.color}20`,
+                                                                    color: status.textColor
+                                                                }}>
+                                                                    {status.icon} {status.message}
+                                                                </span>
+                                                            )}
+                                                            {userLocation && item.distance !== undefined && (
+                                                                <span className="px-3 py-1 rounded-full text-xs font-black bg-blue-100 text-blue-700">
+                                                                    📍 {formatDistance(item.distance)}
+                                                                </span>
                                                             )}
                                                         </div>
+                                                        <div className="space-y-2">
+                                                            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
+                                                                <MapPin size={16} className="shrink-0 text-slate-300" />
+                                                                <span className="truncate">{item.address}</span>
+                                                            </div>
+                                                            <div className="flex gap-2">
+                                                                {item.phone && (
+                                                                    <div className="flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-600">
+                                                                        <Phone size={12} />
+                                                                        {item.phone}
+                                                                    </div>
+                                                                )}
+                                                                {item.is_24h && (
+                                                                    <div className="flex items-center gap-1.5 rounded-full bg-purple-50 px-3 py-1 text-xs font-bold text-purple-600">
+                                                                        24시간
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-50 text-slate-300 group-hover:bg-red-500 group-hover:text-white transition-all shadow-inner">
-                                                    <ChevronRight size={24} />
+                                                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-50 text-slate-300 group-hover:bg-red-500 group-hover:text-white transition-all shadow-inner">
+                                                        <ChevronRight size={24} />
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             ) : (
                                 <div className="py-32 text-center">

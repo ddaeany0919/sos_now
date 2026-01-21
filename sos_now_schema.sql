@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS public.emergency_hospitals (
 -- 4. 심야 약국 및 24시 동물병원 테이블
 CREATE TABLE IF NOT EXISTS public.emergency_stores (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    external_id TEXT UNIQUE, -- NEMC API의 hpid 등
     type TEXT CHECK (type IN ('PHARMACY', 'ANIMAL_HOSPITAL')),
     name TEXT NOT NULL,
     address TEXT,

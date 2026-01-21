@@ -77,17 +77,21 @@ export async function GET() {
             }
         ];
 
-        // Upsert Stores
+        // Delete existing mock data
+        await supabase.from('emergency_stores').delete().in('type', ['PHARMACY', 'ANIMAL_HOSPITAL']);
+        await supabase.from('aeds').delete().neq('id', '');
+
+        // Insert Stores
         const { error: storeError } = await supabase
             .from('emergency_stores')
-            .upsert([...pharmacies, ...animalHospitals], { onConflict: 'name,address' });
+            .insert([...pharmacies, ...animalHospitals]);
 
         if (storeError) throw storeError;
 
-        // Upsert AEDs
+        // Insert AEDs
         const { error: aedError } = await supabase
             .from('aeds')
-            .upsert(aeds, { onConflict: 'id' });
+            .insert(aeds);
 
         if (aedError) throw aedError;
 
