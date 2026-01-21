@@ -198,17 +198,161 @@ npm run dev
 
 ## 🎯 다음 할 일
 
-### 즉시 가능한 개선
-- [ ] PWA manifest 및 service worker 추가
-- [ ] 프로덕션 빌드 테스트 (`npm run build`)
-- [ ] 다양한 시간대 테스트 (새벽, 점심, 저녁)
-- [ ] SEO 메타 태그 최적화
+## 🎯 다음 할 일
 
-### 장기 계획
-- [ ] 푸시 알림 시스템 구축
-- [ ] 사용자 리뷰 및 평점 기능
-- [ ] 병원별 대기시간 예측 AI
+### ✅ 완료된 작업 (2026-01-21)
+- [x] Phase 4+ 개발 완료
+- [x] 프로덕션 빌드 테스트 성공
+- [x] PWA manifest.json 설정
+- [x] 앱 아이콘 생성 (192x192, 512x512, 180x180)
+- [x] SEO 메타 태그 최적화
+- [x] Git 커밋 & GitHub 푸시
+
+### 🚀 즉시 진행 - Vercel 배포 (10분)
+
+#### Step 1: Vercel 계정 및 프로젝트 생성
+1. https://vercel.com 접속 (GitHub 계정으로 로그인)
+2. "Add New" → "Project" 클릭
+3. GitHub 저장소 `ddaeany0919/sos_now` 선택
+4. "Import" 클릭
+
+#### Step 2: 환경 변수 설정
+**Build & Development Settings**에서 다음 환경 변수 추가:
+
+```plaintext
+NEMC_SERVICE_KEY=공공데이터포털_인증키
+NEXT_PUBLIC_NAVER_MAP_CLIENT_ID=네이버지도_클라이언트ID
+NEXT_PUBLIC_SUPABASE_URL=https://프로젝트ID.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=Supabase_익명키
+```
+
+**환경 변수 확인**:
+- `.env.local` 파일의 값을 그대로 복사
+- `NEXT_PUBLIC_`으로 시작하는 변수는 클라이언트에서 사용 가능
+
+#### Step 3: 배포 시작
+1. "Deploy" 버튼 클릭
+2. 약 3-5분 대기 (자동 빌드 및 배포)
+3. 배포 완료 시 URL 확인 (예: `https://sos-now.vercel.app`)
+
+#### Step 4: 배포 후 테스트 체크리스트
+- [ ] 홈 페이지 로드 확인
+- [ ] /map 페이지 접속
+- [ ] 지도 정상 렌더링
+- [ ] 병원/약국/AED 마커 표시
+- [ ] 위치 권한 요청 작동
+- [ ] 마커 클릭 → 바텀시트 표시
+- [ ] 영업시간 실시간 계산 확인
+- [ ] 거리 정렬 작동
+- [ ] 공유 버튼 기능 테스트
+- [ ] 모바일 반응형 확인
+
+#### Step 5: PWA 설치 테스트
+**Android (Chrome)**:
+1. 배포된 URL 접속
+2. 주소창 오른쪽 "설치" 아이콘 또는 메뉴 → "홈 화면에 추가"
+3. 홈 화면에서 앱처럼 실행 확인
+
+**iOS (Safari)**:
+1. Safari로 접속
+2. 공유 버튼 (↑) → "홈 화면에 추가"
+3. 독립 실행 모드 확인
+
+**Desktop (Chrome/Edge)**:
+1. 주소창 오른쪽 "⊕" 설치 아이콘 클릭
+2. Windows 앱처럼 실행 확인
+
+---
+
+### 📱 네이버 지도 API 도메인 등록 (필수)
+
+배포 완료 후 네이버 클라우드 플랫폼에서 도메인 추가:
+1. https://console.ncloud.com 접속
+2. Maps > Web Dynamic Map
+3. 애플리케이션 설정
+4. 허용된 도메인 추가:
+   ```
+   https://sos-now.vercel.app
+   https://*.vercel.app
+   ```
+
+---
+
+### 🔄 자동 재배포 설정
+
+Vercel은 GitHub와 연동되어 있어 `main` 브랜치에 푸시할 때마다 자동 배포됩니다:
+```bash
+git add .
+git commit -m "기능 추가/수정"
+git push origin main
+# → Vercel 자동 빌드 및 배포
+```
+
+---
+
+### 🎯 배포 완료 후 다음 단계
+
+#### Phase 5: 모바일 앱 배포 (Android/iOS)
+- [ ] Capacitor 설정
+- [ ] Android APK 빌드
+- [ ] Google Play Console 등록
+- [ ] iOS 빌드 (Mac 필요)
+- [ ] App Store Connect 등록
+
+**상세 가이드**: `DEPLOYMENT_GUIDE.md` 참고
+
+#### Phase 6: 기능 개선
+- [ ] 푸시 알림 시스템
+- [ ] 즐겨찾기 알림 (영업 시작 30분 전)
+- [ ] 반경 검색 (3km/5km/10km)
+- [ ] 고급 필터 (소아과, 주차 가능 등)
+- [ ] 동물병원 실제 데이터 확충
+
+---
+
+### 📊 성능 모니터링
+
+#### Vercel Analytics 활성화
+1. Vercel 대시보드 → 프로젝트 선택
+2. "Analytics" 탭 클릭
+3. 실시간 방문자, 성능 지표 확인
+
+#### 오류 모니터링
+- Vercel Logs에서 런타임 오류 확인
+- Supabase Dashboard에서 DB 쿼리 모니터링
+
+---
+
+### 💡 문제 해결
+
+#### 배포 실패 시
+```bash
+# 로컬에서 프로덕션 빌드 테스트
+npm run build
+
+# 에러 확인 후 수정
+# 다시 푸시하면 자동 재배포
+```
+
+#### 환경 변수 오류
+- Vercel 대시보드 → Settings → Environment Variables
+- 변수 확인 및 재입력
+- "Redeploy" 클릭
+
+#### 지도 안 보임
+- 네이버 지도 API 도메인 등록 확인
+- 콘솔에서 CORS 오류 확인
+
+---
+
+### 📞 추가 문서
+
+- **인수인계 가이드**: `HANDOVER.md`
+- **Phase 4 상세 내용**: `PHASE4_IMPROVEMENTS.md`
+- **배포 가이드**: `DEPLOYMENT_GUIDE.md`
+- **배포 체크리스트**: `DEPLOYMENT_CHECKLIST.md`
 
 ---
 
 *본 프로젝트는 생명을 구하는 데 1분 1초가 중요하다는 신념으로 개발되었습니다. 🚑*
+
