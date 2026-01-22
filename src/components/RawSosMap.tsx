@@ -13,7 +13,11 @@ declare global {
     }
 }
 
-export default function RawSosMap() {
+interface RawSosMapProps {
+    filteredItems?: any[];
+}
+
+export default function RawSosMap({ filteredItems }: RawSosMapProps) {
     const mapElement = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<any>(null);
     const markers = useRef<any[]>([]);
@@ -206,11 +210,19 @@ export default function RawSosMap() {
         }
     };
 
+
     useEffect(() => {
         if (isMapLoaded) {
             fetchData();
         }
     }, [selectedCategory, favorites, isMapLoaded]);
+
+    // filteredItems가 변경될 때만 마커 업데이트
+    useEffect(() => {
+        if (isMapLoaded && filteredItems && filteredItems.length >= 0) {
+            updateMarkers(filteredItems);
+        }
+    }, [filteredItems]);
 
     return (
         <>

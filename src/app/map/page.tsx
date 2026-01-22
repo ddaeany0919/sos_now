@@ -172,7 +172,7 @@ export default function MapPage() {
             <div className="h-full w-full">
                 {viewMode === 'map' ? (
                     <div className="h-full w-full">
-                        <RawSosMap />
+                        <RawSosMap filteredItems={filteredItems} />
 
                         {/* Map Overlay Warning */}
                         <div className="absolute bottom-32 left-0 right-0 z-10 px-4 pointer-events-none">
