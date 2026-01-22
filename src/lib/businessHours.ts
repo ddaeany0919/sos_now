@@ -50,15 +50,28 @@ export function getPharmacyStatus(pharmacy: any): BusinessStatus {
     };
   }
 
-  // 요일별 영업시간 필드 매핑
-  // dutyTime1s/c = 월요일, dutyTime2s/c = 화요일, ..., dutyTime7s/c = 일요일
-  // dutyTime8s/c = 공휴일
-  const dayIndex = currentDay === 0 ? 7 : currentDay; // 일요일은 7로 매핑
-  const openTimeField = `dutyTime${dayIndex}s`;
-  const closeTimeField = `dutyTime${dayIndex}c`;
+  // business_hours가 JSON 객체로 저장된 경우 처리
+  let openTime: string | null = null;
+  let closeTime: string | null = null;
 
-  const openTime = pharmacy[openTimeField];
-  const closeTime = pharmacy[closeTimeField];
+  if (pharmacy.business_hours && typeof pharmacy.business_hours === 'object') {
+    // JSON 객체 형식
+    const dayMap = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const dayKey = dayMap[currentDay];
+    const hours = pharmacy.business_hours[dayKey];
+
+    if (hours && hours.includes('-')) {
+      [openTime, closeTime] = hours.split('-');
+    }
+  } else {
+    // 개별 필드 형식
+    const dayIndex = currentDay === 0 ? 7 : currentDay;
+    const openTimeField = `dutyTime${dayIndex}s`;
+    const closeTimeField = `dutyTime${dayIndex}c`;
+
+    openTime = pharmacy[openTimeField];
+    closeTime = pharmacy[closeTimeField];
+  }
 
   // 영업시간 정보가 없는 경우
   if (!openTime || !closeTime) {
@@ -88,7 +101,7 @@ export function getPharmacyStatus(pharmacy: any): BusinessStatus {
   // 영업 중
   if (currentMinutes >= openMinutes && currentMinutes < closeMinutes) {
     const remainingMinutes = closeMinutes - currentMinutes;
-    
+
     // 30분 이내 마감
     if (remainingMinutes <= 30) {
       return {
