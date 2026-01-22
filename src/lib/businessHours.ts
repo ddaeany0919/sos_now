@@ -14,20 +14,37 @@ export interface BusinessStatus {
 }
 
 /**
- * "0900" 형식의 시간을 "09:00" 형식으로 변환
+ * "0900" 또는 "900" 형식의 시간을 "09:00" 형식으로 변환
  */
 function formatTime(time: string): string {
-  if (!time || time.length !== 4) return '--:--';
-  return `${time.slice(0, 2)}:${time.slice(2, 4)}`;
+  if (!time) return '--:--';
+  if (time.length !== 3 && time.length !== 4) return '--:--';
+
+  const normalizedTime = time.length === 3 ? '0' + time : time;
+  return `${normalizedTime.slice(0, 2)}:${normalizedTime.slice(2, 4)}`;
 }
 
 /**
- * "0900" 형식의 시간을 분으로 변환
+ * "0900" 또는 "900" 형식의 시간을 분으로 변환
+ * 특수 케이스: "2400" = 다음날 00:00 = 1440분
  */
 function timeToMinutes(time: string): number {
-  if (!time || time.length !== 4) return -1;
-  const hours = parseInt(time.slice(0, 2), 10);
-  const minutes = parseInt(time.slice(2, 4), 10);
+  if (!time) return -1;
+  if (time.length !== 3 && time.length !== 4) return -1;
+
+  const normalizedTime = time.length === 3 ? '0' + time : time;
+  const hours = parseInt(normalizedTime.slice(0, 2), 10);
+  const minutes = parseInt(normalizedTime.slice(2, 4), 10);
+
+  if (isNaN(hours) || isNaN(minutes)) return -1;
+
+  // 24:00 (자정) 특별 처리
+  if (hours === 24 && minutes === 0) return 1440;
+
+  // 일반 유효성 검사 (00:00 ~ 23:59)
+  if (hours > 24 || minutes > 59) return -1;
+  if (hours === 24 && minutes > 0) return -1; // 24:01 같은 잘못된 시간
+
   return hours * 60 + minutes;
 }
 

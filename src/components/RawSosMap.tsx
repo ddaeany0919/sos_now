@@ -14,10 +14,12 @@ declare global {
 }
 
 interface RawSosMapProps {
-    filteredItems?: any[];
+    searchQuery?: string;
+    filterOpenNow?: boolean;
+    viewMode?: 'map' | 'list';
 }
 
-export default function RawSosMap({ filteredItems }: RawSosMapProps) {
+export default function RawSosMap({ searchQuery = '', filterOpenNow = false, viewMode = 'map' }: RawSosMapProps) {
     const mapElement = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<any>(null);
     const markers = useRef<any[]>([]);
@@ -97,7 +99,12 @@ export default function RawSosMap({ filteredItems }: RawSosMapProps) {
                 data = useSosStore.getState().favorites;
             }
 
-            setItems(data);
+            // 지도 뷰일 때만 전역 상태 업데이트
+            if (viewMode === 'map') {
+                setItems(data);
+            }
+
+            // 초기 마커 업데이트 (필터링 없이)
             updateMarkers(data);
         } catch (error) {
             console.error("RawSosMap: Fetch error", error);
@@ -217,12 +224,31 @@ export default function RawSosMap({ filteredItems }: RawSosMapProps) {
         }
     }, [selectedCategory, favorites, isMapLoaded]);
 
-    // filteredItems가 변경될 때만 마커 업데이트
+    // 검색/필터 변경 시 마커만 업데이트 (데이터 재로딩 없이)
     useEffect(() => {
-        if (isMapLoaded && filteredItems && filteredItems.length >= 0) {
-            updateMarkers(filteredItems);
+        if (isMapLoaded && items.length > 0) {
+            const filtered = items.filter(item => {
+                const name = item.name || item.place_name || '';
+                const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase());
+
+                if (!matchesSearch) return false;
+
+                if (filterOpenNow) {
+                    if (selectedCategory === 'EMERGENCY') return true;
+                    if (item.is_24h) return true;
+
+                    if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
+                        const status = getPharmacyStatus(item);
+                        return status.status === 'open' || status.status === 'closing-soon';
+                    }
+                }
+
+                return true;
+            });
+
+            updateMarkers(filtered);
         }
-    }, [filteredItems]);
+    }, [searchQuery, filterOpenNow, items, isMapLoaded]);
 
     return (
         <>

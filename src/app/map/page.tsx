@@ -5,7 +5,7 @@ import RawSosMap from '@/components/RawSosMap';
 import SosBottomSheet from '@/components/SosBottomSheet';
 import { useSosStore, CategoryType } from '@/store/useSosStore';
 import { getPharmacyStatus } from '@/lib/businessHours';
-import { sortByDistance, formatDistance } from '@/lib/distance';
+import { sortByDistance, formatDistance, getDistance } from '@/lib/distance';
 import {
     HeartPulse, Pill, Dog, ShieldAlert, Search,
     List, Map as MapIcon, AlertCircle, Star,
@@ -109,25 +109,89 @@ export default function MapPage() {
     return (
         <div className="relative h-screen w-full overflow-hidden bg-slate-50 font-sans selection:bg-red-100 selection:text-red-600">
             {/* Floating Header */}
-            <div className="absolute left-0 right-0 top-0 z-40 p-4 md:p-6 pointer-events-none">
+            <div className="absolute left-0 right-0 top-0 z-50 p-4 md:p-6 pointer-events-none">
                 <div className="mx-auto max-w-2xl space-y-4 pointer-events-auto">
                     {/* Search Bar Area */}
-                    <div className="flex items-center gap-3">
-                        <div className="group flex flex-1 items-center gap-3 rounded-[24px] glass px-5 py-4 shadow-2xl transition-all focus-within:ring-2 focus-within:ring-red-500/20">
-                            <Search className="text-slate-400 group-focus-within:text-red-500 transition-colors" size={22} />
-                            <input
-                                type="text"
-                                placeholder="병원, 약국, 지역 검색..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-400"
-                            />
-                            {searchQuery && (
-                                <button onClick={() => setSearchQuery('')} className="p-1 hover:bg-slate-100 rounded-full text-slate-400">
-                                    <X size={18} />
-                                </button>
+                    <div className="relative flex items-center gap-3">
+                        <div className="group relative flex flex-1 flex-col">
+                            <div className="flex items-center gap-3 rounded-[24px] glass px-5 py-4 shadow-2xl transition-all focus-within:ring-2 focus-within:ring-red-500/20">
+                                <Search className="text-slate-400 group-focus-within:text-red-500 transition-colors" size={22} />
+                                <input
+                                    type="text"
+                                    placeholder="병원, 약국, 지역 검색..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="w-full bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-400"
+                                />
+                                {searchQuery && (
+                                    <button onClick={() => setSearchQuery('')} className="p-1 hover:bg-slate-100 rounded-full text-slate-400">
+                                        <X size={18} />
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Search Autocomplete Dropdown */}
+                            {searchQuery && filteredItems.length > 0 && viewMode === 'map' && (
+                                <div className="absolute top-full left-0 right-0 mt-2 glass rounded-3xl shadow-2xl overflow-hidden max-h-96 overflow-y-auto z-[60]">
+                                    <div className="p-2">
+                                        <div className="text-xs font-bold text-slate-500 px-4 py-2">
+                                            검색 결과 {filteredItems.length}개
+                                        </div>
+                                        {filteredItems.slice(0, 5).map((item, index) => {
+                                            const status = (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL')
+                                                ? getPharmacyStatus(item)
+                                                : null;
+                                            const distance = userLocation
+                                                ? formatDistance(getDistance(userLocation.lat, userLocation.lng, item.lat, item.lng))
+                                                : null;
+
+                                            return (
+                                                <button
+                                                    key={item.id || index}
+                                                    onClick={() => {
+                                                        setSelectedItem(item);
+                                                        setBottomSheetOpen(true);
+                                                    }}
+                                                    className="w-full text-left px-4 py-3 hover:bg-white/50 rounded-2xl transition-all"
+                                                >
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="font-bold text-slate-900 truncate">
+                                                                {item.name || item.place_name}
+                                                            </div>
+                                                            <div className="text-xs text-slate-500 truncate mt-1">
+                                                                {item.address || item.road_address}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 flex-shrink-0">
+                                                            {status && (
+                                                                <span className="text-xs font-bold px-2 py-1 rounded-full" style={{
+                                                                    backgroundColor: status.color + '20',
+                                                                    color: status.textColor
+                                                                }}>
+                                                                    {status.icon}
+                                                                </span>
+                                                            )}
+                                                            {distance && (
+                                                                <span className="text-xs font-bold text-slate-500">
+                                                                    📍 {distance}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                        {filteredItems.length > 5 && (
+                                            <div className="px-4 py-2 text-xs text-center text-slate-500">
+                                                +{filteredItems.length - 5}개 더 있음 (리스트 뷰에서 확인)
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
                             )}
                         </div>
+
                         <button
                             onClick={() => setViewMode(viewMode === 'map' ? 'list' : 'map')}
                             className="flex h-[60px] w-[60px] items-center justify-center rounded-[24px] glass text-slate-600 hover:text-red-500 transition-all hover:scale-105 active:scale-95 shadow-xl"
@@ -172,7 +236,7 @@ export default function MapPage() {
             <div className="h-full w-full">
                 {viewMode === 'map' ? (
                     <div className="h-full w-full">
-                        <RawSosMap filteredItems={filteredItems} />
+                        <RawSosMap searchQuery={searchQuery} filterOpenNow={filterOpenNow} viewMode={viewMode} />
 
                         {/* Map Overlay Warning */}
                         <div className="absolute bottom-32 left-0 right-0 z-10 px-4 pointer-events-none">
@@ -185,7 +249,7 @@ export default function MapPage() {
                         </div>
                     </div>
                 ) : (
-                    <div className="h-full w-full overflow-y-auto bg-slate-50 px-4 pt-40 pb-32 no-scrollbar">
+                    <div className="h-full w-full overflow-y-auto bg-slate-50 px-4 pt-56 pb-32 no-scrollbar">
                         <div className="mx-auto max-w-2xl space-y-6">
                             {/* List Header */}
                             <div className="flex items-center justify-between px-2">
