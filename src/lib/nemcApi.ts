@@ -18,7 +18,61 @@ export interface NemcHospital {
     wgs84Lon: number;
 }
 
-// ... (Existing interfaces)
+/**
+ * 전국 응급의료기관(병원) 기본 정보 조회 (위치 정보 포함)
+ */
+export async function fetchHospitalList(city?: string, district?: string) {
+    const HOSPITAL_URL = `${NEMC_BASE_URL}/getEgytListInfoInqire`;
+    const params = new URLSearchParams();
+    params.append('serviceKey', SERVICE_KEY);
+    if (city) params.append('Q0', city);
+    if (district) params.append('Q1', district);
+    params.append('numOfRows', '3000');
+    params.append('pageNo', '1');
+
+    const finalUrl = `${HOSPITAL_URL}?${params.toString()}`;
+    console.log('Fetching Hospitals from:', finalUrl);
+
+    try {
+        const response = await fetch(finalUrl);
+        const xmlData = await response.text();
+        const result = parser.parse(xmlData);
+        const items = result.response?.body?.items?.item || [];
+        console.log(`Fetched ${Array.isArray(items) ? items.length : (items ? 1 : 0)} hospitals`);
+        return items;
+    } catch (error) {
+        console.error('Hospital Fetch Error:', error);
+        return [];
+    }
+}
+
+/**
+ * 실시간 응급실 가용 병상 정보 조회
+ */
+export async function fetchRealtimeBeds(city?: string, district?: string) {
+    const REALTIME_URL = `${NEMC_BASE_URL}/getEmrrmRltmUsefulSckbdInfoInqire`;
+    const params = new URLSearchParams();
+    params.append('serviceKey', SERVICE_KEY);
+    if (city) params.append('STAGE1', city);
+    if (district) params.append('STAGE2', district);
+    params.append('numOfRows', '3000');
+    params.append('pageNo', '1');
+
+    const finalUrl = `${REALTIME_URL}?${params.toString()}&_=${Date.now()}`;
+    console.log('Fetching Realtime Beds from:', finalUrl);
+
+    try {
+        const response = await fetch(finalUrl, { cache: 'no-store' });
+        const xmlData = await response.text();
+        const result = parser.parse(xmlData);
+        const items = result.response?.body?.items?.item || [];
+        console.log(`Fetched ${Array.isArray(items) ? items.length : (items ? 1 : 0)} realtime statuses`);
+        return items;
+    } catch (error) {
+        console.error('Realtime Beds Fetch Error:', error);
+        return [];
+    }
+}
 
 /**
  * 전국 약국 목록 조회

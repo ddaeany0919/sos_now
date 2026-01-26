@@ -27,6 +27,7 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
     const [isMapLoaded, setIsMapLoaded] = useState(false);
     const [isScriptLoaded, setIsScriptLoaded] = useState(false);
     const { selectedCategory, setSelectedItem, setBottomSheetOpen, items, setItems, favorites, setIsLoading } = useSosStore();
+    const fetchIdRef = useRef(0);
 
     const debounceTimer = useRef<NodeJS.Timeout | null>(null);
     const searchDebounceTimer = useRef<NodeJS.Timeout | null>(null);
@@ -87,15 +88,23 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
             }
 
             // Initial fetch
-            fetchData();
+            try {
+                fetchData();
+            } catch (fdError) {
+                console.error("RawSosMap: Initial fetchData failed", fdError);
+            }
         } catch (error) {
             console.error("RawSosMap: Initialization error", error);
+            // Even if map init fails partially, we might want to kill the spinner loop if possible,
+            // but if map instance is null, we can't do much.
+            // If it's authentication error, simple catch won't help much as Naver handles it.
         }
     };
 
     const fetchData = async () => {
         if (!window.naver || !window.naver.maps || !mapInstance.current) return;
 
+        const currentFetchId = ++fetchIdRef.current;
         setIsLoading(true);
         let data: any[] = [];
         const bounds = mapInstance.current.getBounds();
@@ -112,34 +121,92 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
             } else if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
                 query = supabase.from('emergency_stores').select('*').eq('type', selectedCategory);
             } else if (selectedCategory === 'AED') {
-                query = supabase.from('aeds').select('*');
+                // 병원, 의료원, 보건소, 응급실 내의 AED는 제외 (사용자 요청)
+                query = supabase.from('aeds').select('*')
+                    .not('place_name', 'ilike', '%병원%')
+                    .not('place_name', 'ilike', '%의료원%')
+                    .not('place_name', 'ilike', '%보건소%')
+                    .not('place_name', 'ilike', '%장례식장%')
+                    .not('place_name', 'ilike', '%응급%');
             } else if (selectedCategory === 'FAVORITES') {
                 data = useSosStore.getState().favorites;
+                if (currentFetchId !== fetchIdRef.current) return;
                 setItems(data);
                 updateMarkers(data);
                 setIsLoading(false);
                 return;
             }
 
-            // Apply bounds filter
-            if (query) {
-                query = query.gte('lat', minLat).lte('lat', maxLat)
-                    .gte('lng', minLng).lte('lng', maxLng);
+            // Apply bounds filter ONLY if zoomed in sufficiently
+            // If zoomed out (viewing whole country), we fetch ALL data to ensure clusters are correct everywhere.
+            // Zoom level 10 is roughly a province/city level. Zoom 6-7 is whole country.
+            // Let's say if zoom < 12, we fetch EVERYTHING (up to MAX_FETCH).
+            // This ensures "Chak" appearance.
+            const currentZoom = mapInstance.current.getZoom();
 
-                const { data: result, error } = await query;
-                if (error) throw error;
-                data = result || [];
+            // If query exists (it does)
+            if (query) {
+                // Bounds filter: Only apply if user is zoomed in (Zoom >= 12)
+                // This prevents "Seoul Only" when looking at whole map.
+                if (bounds && currentZoom >= 12) {
+                    query = query.gte('lat', minLat).lte('lat', maxLat)
+                        .gte('lng', minLng).lte('lng', maxLng);
+                } else {
+                    console.log("RawSosMap: Wide Area View (Zoom " + currentZoom + ") - Fetching global data");
+                }
+
+                // Pagination Logic to bypass Supabase 1000 row limit
+                let allData: any[] = [];
+                const PAGE_SIZE = 1000;
+                const MAX_FETCH = 50000; // Increase to 50k to cover almost all AEDs in Korea
+                let page = 0;
+
+                while (true) {
+                    if (currentFetchId !== fetchIdRef.current) return;
+                    const { data: result, error } = await query.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+                    if (error) {
+                        console.error("Supabase Query Error:", error);
+                        break; // Stop on error but keep what we have
+                    }
+
+                    const pageData = result || [];
+                    if (pageData.length === 0) break;
+
+                    allData = [...allData, ...pageData];
+
+                    if (pageData.length < PAGE_SIZE || allData.length >= MAX_FETCH) break;
+                    page++;
+                }
+
+                // De-duplicate results to avoid 'weird numbers' if some overlap occurs
+                const uniqueDataMap = new Map();
+                allData.forEach(item => {
+                    const id = item.id || item.external_id || item.hp_id;
+                    if (id && !uniqueDataMap.has(id)) {
+                        uniqueDataMap.set(id, item);
+                    } else if (!id) {
+                        // Fallback for items with no ID (shouldn't happen)
+                        allData.push(item);
+                    }
+                });
+
+                data = Array.from(uniqueDataMap.values());
             }
 
-            // Always update global state regardless of viewMode
-            setItems(data);
+            if (currentFetchId !== fetchIdRef.current) return;
 
-            // 초기 마커 업데이트 (필터링 없이)
+            setItems(data);
             updateMarkers(data);
         } catch (error) {
             console.error("RawSosMap: Fetch error", error);
+            if (currentFetchId === fetchIdRef.current) {
+                setItems([]);
+            }
         } finally {
-            setIsLoading(false);
+            if (currentFetchId === fetchIdRef.current) {
+                setIsLoading(false);
+            }
         }
     };
 
@@ -247,6 +314,21 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
         markers.current = newMarkers;
 
         if (window.MarkerClustering) {
+            // Determine Cluster Color based on Category
+            let clusterColor = 'rgba(239,68,68,0.9)'; // Default Red (Emergency)
+            let clusterColorSolid = 'rgba(239,68,68,1)';
+
+            if (selectedCategory === 'PHARMACY') {
+                clusterColor = 'rgba(16,185,129,0.9)'; // Green
+                clusterColorSolid = 'rgba(16,185,129,1)';
+            } else if (selectedCategory === 'ANIMAL_HOSPITAL') {
+                clusterColor = 'rgba(59,130,246,0.9)'; // Blue
+                clusterColorSolid = 'rgba(59,130,246,1)';
+            } else if (selectedCategory === 'AED') {
+                clusterColor = 'rgba(245,158,11,0.9)'; // Orange
+                clusterColorSolid = 'rgba(245,158,11,1)';
+            }
+
             clusterInstance.current = new window.MarkerClustering({
                 minClusterSize: 2,
                 maxZoom: 16,
@@ -256,12 +338,12 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
                 gridSize: 120,
                 icons: [
                     {
-                        content: `<div style="cursor:pointer;width:40px;height:40px;line-height:42px;font-size:14px;color:white;text-align:center;font-weight:900;background:rgba(239,68,68,0.9);border:3px solid white;border-radius:50%;box-shadow:0 4px 15px rgba(239,68,68,0.4);"></div>`,
+                        content: `<div style="cursor:pointer;width:40px;height:40px;line-height:42px;font-size:14px;color:white;text-align:center;font-weight:900;background:${clusterColor};border:3px solid white;border-radius:50%;box-shadow:0 4px 15px rgba(0,0,0,0.2);"></div>`,
                         size: new naver.maps.Size(40, 40),
                         anchor: new naver.maps.Point(20, 20)
                     },
                     {
-                        content: `<div style="cursor:pointer;width:50px;height:50px;line-height:52px;font-size:16px;color:white;text-align:center;font-weight:900;background:rgba(239,68,68,1);border:4px solid white;border-radius:50%;box-shadow:0 6px 20px rgba(239,68,68,0.5);"></div>`,
+                        content: `<div style="cursor:pointer;width:50px;height:50px;line-height:52px;font-size:16px;color:white;text-align:center;font-weight:900;background:${clusterColorSolid};border:4px solid white;border-radius:50%;box-shadow:0 6px 20px rgba(0,0,0,0.2);"></div>`,
                         size: new naver.maps.Size(50, 50),
                         anchor: new naver.maps.Point(25, 25)
                     }
@@ -278,6 +360,8 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
 
     useEffect(() => {
         if (isMapLoaded) {
+            // 카테고리 변경 시 즉시 마커 클리어 (이전 카테고리 잔상 방지)
+            updateMarkers([]);
             fetchData();
         }
     }, [selectedCategory, favorites, isMapLoaded]);

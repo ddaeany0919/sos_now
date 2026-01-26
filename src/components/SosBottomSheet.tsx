@@ -240,15 +240,26 @@ export default function SosBottomSheet() {
                             const lng = selectedItem.lng;
                             const name = selectedItem.name || selectedItem.place_name;
 
-                            // Naver Map Universal Link for Directions
-                            // This format is more robust for both mobile and web
-                            const naverUrl = `https://map.naver.com/v5/directions/-/${encodeURIComponent(name)},${lat},${lng},PLACE_POI/-`;
+                            // 더 확실한 네이버 지도 URL 포맷 (도착지 설정)
+                            // 모바일: nmap 스키마
+                            // 웹: map.naver.com 링크
 
-                            // Fallback for mobile app if needed (though the web URL usually redirects)
-                            const naverAppUrl = `nmap://route?dlat=${lat}\u0026dlng=${lng}\u0026dname=${encodeURIComponent(name)}\u0026appname=sosnow`;
+                            const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-                            // Try to open app, fallback to web
-                            window.open(naverUrl, '_blank');
+                            if (isMobile) {
+                                // 네이버 지도 앱 스키마 (공식 문서 기준)
+                                // dlat, dlng: 도착지 좌표
+                                // dname: 도착지 명
+                                location.href = `nmap://route/public?dlat=${lat}&dlng=${lng}&dname=${encodeURIComponent(name)}&appname=com.sosnow.app`;
+                            } else {
+                                // PC/Mobile Web Fallback
+                                // 도착지 좌표와 이름을 명시적으로 지정
+                                // format: https://map.naver.com/v5/directions/[start]/[goal]/[transit]?c=[center]
+                                // start is usually '-' (current location)
+                                // goal: lat,lng,name
+                                const webUrl = `https://map.naver.com/v5/directions/-/${lng},${lat},${encodeURIComponent(name)},,/-/transit?c=${lng},${lat},15,0,0,0,dh`;
+                                window.open(webUrl, '_blank');
+                            }
                         }}
                         className="flex items-center justify-center gap-2 rounded-[24px] bg-slate-900 py-4 text-lg font-black text-white shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 active:scale-95"
                     >

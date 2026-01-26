@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 
-type TabType = 'HOSPITAL' | 'PHARMACY' | 'AED';
+type TabType = 'HOSPITAL' | 'PHARMACY' | 'AED' | 'ANIMAL_HOSPITAL';
 
 export default function SosNowAdmin() {
     const [items, setItems] = useState<any[]>([]);
@@ -18,6 +18,8 @@ export default function SosNowAdmin() {
             query = supabase.from('emergency_hospitals').select('*').order('beds_available', { ascending: false });
         } else if (tab === 'PHARMACY') {
             query = supabase.from('emergency_stores').select('*').eq('type', 'PHARMACY').order('name');
+        } else if (tab === 'ANIMAL_HOSPITAL') {
+            query = supabase.from('emergency_stores').select('*').eq('type', 'ANIMAL_HOSPITAL').order('name');
         } else {
             query = supabase.from('aeds').select('*').order('place_name');
         }
@@ -27,17 +29,24 @@ export default function SosNowAdmin() {
         setLoading(false);
     };
 
-    const handleSync = async (type: string) => {
+    const handleSync = async (type: string, options: { clear?: boolean } = {}) => {
         setSyncing(true);
         try {
-            const endpoint = type === 'HOSPITAL' ? 'hospitals' : type === 'PHARMACY' ? 'pharmacies' : 'aeds';
-            const res = await fetch(`/api/sync/${endpoint}`);
+            let endpoint = '';
+            if (type === 'HOSPITAL') endpoint = 'hospitals';
+            else if (type === 'PHARMACY') endpoint = 'pharmacies';
+            else if (type === 'ANIMAL_HOSPITAL') endpoint = 'animal-hospitals';
+            else if (type === 'ALL') endpoint = 'all';
+            else endpoint = 'aeds';
+
+            const url = `/api/sync/${endpoint}${options.clear ? '?clear=true' : ''}`;
+            const res = await fetch(url);
             const result = await res.json();
             if (result.success) {
                 alert(`${result.count}개의 데이터가 동기화되었습니다.`);
                 fetchData(activeTab);
             } else {
-                alert(`동기화 실패: ${result.error}`);
+                alert(`동기화 실패: ${result.error || result.message}`);
             }
         } catch (err) {
             alert('동기화 중 오류가 발생했습니다.');
@@ -53,106 +62,124 @@ export default function SosNowAdmin() {
         <div style={{ padding: '20px', fontFamily: 'sans-serif', maxWidth: '1200px', margin: '0 auto' }}>
             <h1 style={{ color: '#E53935', textAlign: 'center', marginBottom: '30px' }}>🚑 SOS-NOW 데이터 관리</h1>
 
-            {/* 동기화 버튼 섹션 */}
-            <div style={{ marginBottom: '30px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+            {/* 전역 동기화 섹션 */}
+            <div style={{ marginBottom: '40px', padding: '30px', backgroundColor: '#FFF5F5', borderRadius: '15px', border: '2px dashed #E53935', textAlign: 'center' }}>
+                <h2 style={{ marginTop: 0, color: '#C62828', fontSize: '1.2rem' }}>⚠️ 위험 구역: 전체 데이터 초기화</h2>
+                <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '20px' }}>
+                    응급실, 약국, AED, 동물병원 데이터를 모두 삭제하고 서버에서 처음부다 다시 긁어옵니다.<br />
+                    데이터 양이 많아 시간이 다소 소요될 수 있습니다.
+                </p>
                 <button
-                    onClick={() => handleSync('HOSPITAL')}
+                    onClick={() => handleSync('ALL')}
                     disabled={syncing}
                     style={{
-                        padding: '12px 24px',
-                        backgroundColor: syncing ? '#ccc' : '#E53935',
+                        padding: '16px 32px',
+                        background: syncing ? '#ccc' : 'linear-gradient(135deg, #E53935 0%, #C62828 100%)',
                         color: 'white',
                         border: 'none',
-                        borderRadius: '8px',
+                        borderRadius: '12px',
                         cursor: 'pointer',
-                        fontWeight: 'bold',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                        fontSize: '1.1rem',
+                        fontWeight: '900',
+                        boxShadow: '0 4px 15px rgba(229, 57, 53, 0.3)',
+                        transition: 'transform 0.2s'
                     }}
+                    onMouseOver={(e) => !syncing && (e.currentTarget.style.transform = 'scale(1.05)')}
+                    onMouseOut={(e) => !syncing && (e.currentTarget.style.transform = 'scale(1)')}
                 >
-                    {syncing ? '동기화 중...' : '🔄 응급실 동기화'}
+                    {syncing ? '⌛ 전체 동기화 중...' : '🚀 전체 데이터 초기화 후 재동기화'}
                 </button>
+            </div>
 
-                <button
-                    onClick={() => handleSync('PHARMACY')}
-                    disabled={syncing}
-                    style={{
-                        padding: '12px 24px',
-                        backgroundColor: syncing ? '#ccc' : '#2196F3',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                    }}
-                >
-                    {syncing ? '동기화 중...' : '💊 약국 동기화'}
-                </button>
+            {/* 개별 동기화 버튼 섹션 */}
+            <div style={{ marginBottom: '30px', display: 'flex', gap: '15px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <button
+                        onClick={() => handleSync('HOSPITAL')}
+                        disabled={syncing}
+                        style={{ padding: '12px 20px', backgroundColor: syncing ? '#ccc' : '#E53935', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                        🔄 응급실 동기화 (업데이트)
+                    </button>
+                    <button
+                        onClick={() => handleSync('HOSPITAL', { clear: true })}
+                        disabled={syncing}
+                        style={{ padding: '6px 12px', fontSize: '11px', backgroundColor: 'transparent', color: '#666', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        🗑️ 삭제 후 재동기화
+                    </button>
+                </div>
 
-                <button
-                    onClick={() => handleSync('AED')}
-                    disabled={syncing}
-                    style={{
-                        padding: '12px 24px',
-                        backgroundColor: syncing ? '#ccc' : '#FF9800',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                    }}
-                >
-                    {syncing ? '동기화 중...' : '⚡ AED 동기화'}
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <button
+                        onClick={() => handleSync('PHARMACY')}
+                        disabled={syncing}
+                        style={{ padding: '12px 20px', backgroundColor: syncing ? '#ccc' : '#2196F3', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                        💊 약국 동기화
+                    </button>
+                    <button
+                        onClick={() => handleSync('PHARMACY', { clear: true })}
+                        disabled={syncing}
+                        style={{ padding: '6px 12px', fontSize: '11px', backgroundColor: 'transparent', color: '#666', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        🗑️ 삭제 후 재동기화
+                    </button>
+                </div>
 
-                <button
-                    onClick={async () => {
-                        setSyncing(true);
-                        try {
-                            const res = await fetch('/api/sync/mock');
-                            const result = await res.json();
-                            if (result.success) {
-                                alert(`샘플 데이터가 동기화되었습니다.`);
-                                fetchData(activeTab);
-                            }
-                        } catch (err) { }
-                        setSyncing(false);
-                    }}
-                    disabled={syncing}
-                    style={{
-                        padding: '12px 24px',
-                        backgroundColor: syncing ? '#ccc' : '#4CAF50',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        fontWeight: 'bold',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                    }}
-                >
-                    🧪 샘플 데이터
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <button
+                        onClick={() => handleSync('AED')}
+                        disabled={syncing}
+                        style={{ padding: '12px 20px', backgroundColor: syncing ? '#ccc' : '#FF9800', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                        ⚡ AED 동기화
+                    </button>
+                    <button
+                        onClick={() => handleSync('AED', { clear: true })}
+                        disabled={syncing}
+                        style={{ padding: '6px 12px', fontSize: '11px', backgroundColor: 'transparent', color: '#666', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        🗑️ 삭제 후 재동기화
+                    </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <button
+                        onClick={() => handleSync('ANIMAL_HOSPITAL')}
+                        disabled={syncing}
+                        style={{ padding: '12px 20px', backgroundColor: syncing ? '#ccc' : '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                        🐶 동물병원 동기화
+                    </button>
+                    <button
+                        onClick={() => handleSync('ANIMAL_HOSPITAL', { clear: true })}
+                        disabled={syncing}
+                        style={{ padding: '6px 12px', fontSize: '11px', backgroundColor: 'transparent', color: '#666', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        🗑️ 삭제 후 재동기화
+                    </button>
+                </div>
             </div>
 
             {/* 탭 메뉴 */}
             <div style={{ display: 'flex', borderBottom: '2px solid #eee', marginBottom: '20px' }}>
-                {(['HOSPITAL', 'PHARMACY', 'AED'] as TabType[]).map((tab) => (
+                {(['HOSPITAL', 'PHARMACY', 'AED', 'ANIMAL_HOSPITAL'] as TabType[]).map((tab) => (
                     <button
                         key={tab}
                         onClick={() => setActiveTab(tab)}
                         style={{
-                            padding: '10px 30px',
+                            padding: '10px 20px',
                             border: 'none',
                             background: 'none',
                             borderBottom: activeTab === tab ? '3px solid #E53935' : 'none',
                             color: activeTab === tab ? '#E53935' : '#666',
                             fontWeight: activeTab === tab ? 'bold' : 'normal',
                             cursor: 'pointer',
-                            fontSize: '16px'
+                            fontSize: '15px'
                         }}
                     >
-                        {tab === 'HOSPITAL' ? '병원' : tab === 'PHARMACY' ? '약국' : 'AED'}
+                        {tab === 'HOSPITAL' ? '병원' : tab === 'PHARMACY' ? '약국' : tab === 'AED' ? 'AED' : '동물병원'}
                     </button>
                 ))}
             </div>

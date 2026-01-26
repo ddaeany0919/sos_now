@@ -2,8 +2,16 @@ import { NextResponse } from 'next/server';
 import { fetchHospitalList, fetchRealtimeBeds } from '@/lib/nemcApi';
 import { supabase } from '@/lib/supabase';
 
-export async function GET() {
+export async function GET(request: Request) {
     try {
+        const { searchParams } = new URL(request.url);
+        const shouldClear = searchParams.get('clear') === 'true';
+
+        if (shouldClear) {
+            console.log('[Hospital Sync] Clearing existing hospitals...');
+            await supabase.from('emergency_hospitals').delete().neq('hp_id', 'placeholder');
+        }
+
         // 1. 실시간 병상 정보 가져오기 (가장 중요)
         const realtimeData = await fetchRealtimeBeds();
         const realtimeItems = Array.isArray(realtimeData) ? realtimeData : [realtimeData];
