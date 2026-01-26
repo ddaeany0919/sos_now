@@ -1,11 +1,13 @@
 'use client';
 
+import { useState, useEffect } from 'react';
+
 import { useSosStore } from '@/store/useSosStore';
 import { getPharmacyStatus } from '@/lib/businessHours';
 import {
     X, Phone, Navigation, Clock, AlertCircle,
     Star, Heart, MapPin, ExternalLink,
-    ShieldCheck, Share2
+    ShieldCheck, Share2, Copy, Check
 } from 'lucide-react';
 
 export default function SosBottomSheet() {
@@ -14,7 +16,18 @@ export default function SosBottomSheet() {
         selectedCategory, favorites, toggleFavorite
     } = useSosStore();
 
+    const [showToast, setShowToast] = useState(false);
+
+    useEffect(() => {
+        if (showToast) {
+            const timer = setTimeout(() => setShowToast(false), 2000);
+            return () => clearTimeout(timer);
+        }
+    }, [showToast]);
+
     if (!selectedItem) return null;
+
+    console.log('SosBottomSheet selectedItem:', selectedItem);
 
     const isFav = favorites.some(f => f.hp_id === selectedItem.hp_id || f.id === selectedItem.id);
 
@@ -26,7 +39,7 @@ export default function SosBottomSheet() {
 
     const name = selectedItem.name || selectedItem.place_name;
     const address = selectedItem.address;
-    const phone = selectedItem.emergency_phone || selectedItem.phone;
+    const phone = selectedItem.emergency_phone || selectedItem.phone || selectedItem.manager_phone;
 
     return (
         <div
@@ -51,6 +64,21 @@ export default function SosBottomSheet() {
                         <div className="flex items-center gap-2 text-slate-500 font-bold">
                             <MapPin size={16} className="shrink-0 text-red-500" />
                             <p className="text-xs md:text-sm">{address}</p>
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText(address);
+                                    setShowToast(true);
+                                }}
+                                className="ml-1 rounded-full p-1 hover:bg-slate-100 text-slate-400 transition-colors"
+                            >
+                                <Copy size={12} />
+                            </button>
+                            {showToast && (
+                                <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full bg-slate-900/90 px-4 py-2 text-sm font-bold text-white shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-4 duration-300 whitespace-nowrap">
+                                    <Check size={16} className="text-emerald-400" />
+                                    주소가 복사되었습니다
+                                </div>
+                            )}
                         </div>
                     </div>
                     <div className="flex flex-col gap-2">
@@ -210,13 +238,17 @@ export default function SosBottomSheet() {
                         onClick={() => {
                             const lat = selectedItem.lat;
                             const lng = selectedItem.lng;
-                            const name = encodeURIComponent(selectedItem.name || selectedItem.place_name);
-                            const naverUrl = `nmap://route/car?dlat=${lat}&dlng=${lng}&dname=${name}&appname=sos-now`;
-                            const webUrl = `https://map.naver.com/v5/directions/-/-/${lat},${lng},${name}/-`;
-                            window.location.href = naverUrl;
-                            setTimeout(() => {
-                                window.open(webUrl, '_blank');
-                            }, 500);
+                            const name = selectedItem.name || selectedItem.place_name;
+
+                            // Naver Map Universal Link for Directions
+                            // This format is more robust for both mobile and web
+                            const naverUrl = `https://map.naver.com/v5/directions/-/${encodeURIComponent(name)},${lat},${lng},PLACE_POI/-`;
+
+                            // Fallback for mobile app if needed (though the web URL usually redirects)
+                            const naverAppUrl = `nmap://route?dlat=${lat}\u0026dlng=${lng}\u0026dname=${encodeURIComponent(name)}\u0026appname=sosnow`;
+
+                            // Try to open app, fallback to web
+                            window.open(naverUrl, '_blank');
                         }}
                         className="flex items-center justify-center gap-2 rounded-[24px] bg-slate-900 py-4 text-lg font-black text-white shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 active:scale-95"
                     >

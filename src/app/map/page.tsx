@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import RawSosMap from '@/components/RawSosMap';
 import SosBottomSheet from '@/components/SosBottomSheet';
+import SplashScreen from '@/components/SplashScreen';
 import { useSosStore, CategoryType } from '@/store/useSosStore';
 import { getPharmacyStatus } from '@/lib/businessHours';
 import { sortByDistance, formatDistance, getDistance } from '@/lib/distance';
@@ -25,6 +26,10 @@ export default function MapPage() {
     const [isScrolled, setIsScrolled] = useState(false);
     const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
     const [sortBy, setSortBy] = useState<'distance' | 'name'>('distance');
+    const [isLoading, setIsLoading] = useState(true);
+    const [visibleCount, setVisibleCount] = useState(20);
+    const [showSplash, setShowSplash] = useState(true);
+    const observerTarget = useRef<HTMLDivElement>(null);
 
     // Get user location
     useEffect(() => {
@@ -41,17 +46,69 @@ export default function MapPage() {
         }
     }, []);
 
+    // Simulate loading for list view
+    useEffect(() => {
+        setIsLoading(true);
+        const timer = setTimeout(() => {
+            setIsLoading(false);
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [selectedCategory, searchQuery, filterOpenNow]);
+
+    // Reset visible count when filters change
+    useEffect(() => {
+        setVisibleCount(20);
+    }, [selectedCategory, searchQuery, filterOpenNow, sortBy]);
+
+    // Infinite scroll observer
+    useEffect(() => {
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0].isIntersecting) {
+                    setVisibleCount((prev) => prev + 20);
+                }
+            },
+            { threshold: 0.1 }
+        );
+
+        if (observerTarget.current) {
+            observer.observe(observerTarget.current);
+        }
+
+        return () => {
+            if (observerTarget.current) {
+                observer.unobserve(observerTarget.current);
+            }
+        };
+    }, [observerTarget.current, isLoading, viewMode]);
+
+
+    // Custom Icon for AED (Heart with Lightning)
+    const HeartLightning = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M11.5 16l1-5h-2.5l1.5-5-4 5h2.5l-1.5 5h3z" fill="currentColor" stroke="none" />
+        </svg>
+    );
+
     const categories: { id: CategoryType; label: string; icon: any; color: string; activeColor: string }[] = [
         { id: 'EMERGENCY', label: '응급실', icon: HeartPulse, color: 'text-red-500', activeColor: 'bg-red-500' },
         { id: 'PHARMACY', label: '약국', icon: Pill, color: 'text-emerald-500', activeColor: 'bg-emerald-500' },
         { id: 'ANIMAL_HOSPITAL', label: '동물병원', icon: Dog, color: 'text-blue-500', activeColor: 'bg-blue-500' },
-        { id: 'AED', label: 'AED', icon: ShieldAlert, color: 'text-amber-500', activeColor: 'bg-amber-500' },
+        { id: 'AED', label: 'AED', icon: HeartLightning, color: 'text-amber-500', activeColor: 'bg-amber-500' },
         { id: 'FAVORITES', label: '즐겨찾기', icon: Star, color: 'text-yellow-500', activeColor: 'bg-yellow-500' },
     ];
 
     const filteredItems = (selectedCategory === 'FAVORITES' ? favorites : items).filter(item => {
         const name = item.name || item.place_name || '';
-        const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase());
+        const address = item.address || '';
+        const roadAddress = item.road_address || '';
+        const query = searchQuery.toLowerCase();
+
+        const matchesSearch =
+            name.toLowerCase().includes(query) ||
+            address.toLowerCase().includes(query) ||
+            roadAddress.toLowerCase().includes(query);
 
         if (!matchesSearch) return false;
 
@@ -108,6 +165,7 @@ export default function MapPage() {
 
     return (
         <div className="relative h-screen w-full overflow-hidden bg-slate-50 font-sans selection:bg-red-100 selection:text-red-600">
+            {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
             {/* Floating Header */}
             <div className="absolute left-0 right-0 top-0 z-50 p-4 md:p-6 pointer-events-none">
                 <div className="mx-auto max-w-2xl space-y-4 pointer-events-auto">
@@ -234,21 +292,21 @@ export default function MapPage() {
 
             {/* Main Content Area */}
             <div className="h-full w-full">
-                {viewMode === 'map' ? (
-                    <div className="h-full w-full">
-                        <RawSosMap searchQuery={searchQuery} filterOpenNow={filterOpenNow} viewMode={viewMode} />
+                <div className={`h-full w-full ${viewMode === 'map' ? 'block' : 'hidden'}`}>
+                    <RawSosMap searchQuery={searchQuery} filterOpenNow={filterOpenNow} viewMode={viewMode} />
 
-                        {/* Map Overlay Warning */}
-                        <div className="absolute bottom-32 left-0 right-0 z-10 px-4 pointer-events-none">
-                            <div className="mx-auto max-w-md rounded-2xl glass-dark p-4 text-center shadow-2xl border-white/5">
-                                <div className="flex items-center justify-center gap-2 text-white font-bold text-sm">
-                                    <AlertCircle size={18} className="text-red-400" />
-                                    방문 전 반드시 전화로 확인하세요
-                                </div>
+                    {/* Map Overlay Warning */}
+                    <div className="absolute bottom-32 left-0 right-0 z-10 px-4 pointer-events-none">
+                        <div className="mx-auto max-w-md rounded-2xl glass-dark p-4 text-center shadow-2xl border-white/5">
+                            <div className="flex items-center justify-center gap-2 text-white font-bold text-sm">
+                                <AlertCircle size={18} className="text-red-400" />
+                                방문 전 반드시 전화로 확인하세요
                             </div>
                         </div>
                     </div>
-                ) : (
+                </div>
+
+                {viewMode === 'list' && (
                     <div className="h-full w-full overflow-y-auto bg-slate-50 px-4 pt-56 pb-32 no-scrollbar">
                         <div className="mx-auto max-w-2xl space-y-6">
                             {/* List Header */}
@@ -267,9 +325,27 @@ export default function MapPage() {
                             </div>
 
                             {/* List Items */}
-                            {sortedItems.length > 0 ? (
+                            {isLoading ? (
                                 <div className="grid gap-4">
-                                    {sortedItems.map((item) => {
+                                    {[...Array(5)].map((_, i) => (
+                                        <div key={i} className="h-32 w-full rounded-[32px] bg-white p-6 shadow-sm border border-slate-100">
+                                            <div className="flex gap-4 animate-pulse">
+                                                <div className="flex-1 space-y-3">
+                                                    <div className="h-6 w-3/4 rounded-full bg-slate-200"></div>
+                                                    <div className="h-4 w-1/2 rounded-full bg-slate-100"></div>
+                                                    <div className="flex gap-2 pt-2">
+                                                        <div className="h-6 w-16 rounded-full bg-slate-100"></div>
+                                                        <div className="h-6 w-16 rounded-full bg-slate-100"></div>
+                                                    </div>
+                                                </div>
+                                                <div className="h-12 w-12 rounded-2xl bg-slate-100"></div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : sortedItems.length > 0 ? (
+                                <div className="grid gap-4">
+                                    {sortedItems.slice(0, visibleCount).map((item) => {
                                         const status = (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL')
                                             ? getPharmacyStatus(item)
                                             : null;
@@ -336,6 +412,12 @@ export default function MapPage() {
                                             </div>
                                         );
                                     })}
+                                    {/* Sentinel for Infinite Scroll */}
+                                    {visibleCount < sortedItems.length && (
+                                        <div ref={observerTarget} className="h-10 w-full flex items-center justify-center">
+                                            <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500"></div>
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="py-32 text-center">

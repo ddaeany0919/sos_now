@@ -25,7 +25,11 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
     const markers = useRef<any[]>([]);
     const clusterInstance = useRef<any>(null);
     const [isMapLoaded, setIsMapLoaded] = useState(false);
-    const { selectedCategory, setSelectedItem, setBottomSheetOpen, items, setItems, favorites } = useSosStore();
+    const [isScriptLoaded, setIsScriptLoaded] = useState(false);
+    const { selectedCategory, setSelectedItem, setBottomSheetOpen, items, setItems, favorites, setIsLoading } = useSosStore();
+
+    const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+    const searchDebounceTimer = useRef<NodeJS.Timeout | null>(null);
 
     const initMap = () => {
         console.log("RawSosMap: initMap called");
@@ -64,6 +68,14 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
                 setBottomSheetOpen(false);
             });
 
+            // Add idle listener for bounds-based fetching
+            naver.maps.Event.addListener(mapInstance.current, 'idle', () => {
+                if (debounceTimer.current) clearTimeout(debounceTimer.current);
+                debounceTimer.current = setTimeout(() => {
+                    fetchData();
+                }, 300);
+            });
+
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition((position) => {
                     if (!window.naver || !window.naver.maps || !mapInstance.current) return;
@@ -74,6 +86,7 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
                 });
             }
 
+            // Initial fetch
             fetchData();
         } catch (error) {
             console.error("RawSosMap: Initialization error", error);
@@ -81,77 +94,123 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
     };
 
     const fetchData = async () => {
-        if (!window.naver || !window.naver.maps) return;
+        if (!window.naver || !window.naver.maps || !mapInstance.current) return;
 
+        setIsLoading(true);
         let data: any[] = [];
+        const bounds = mapInstance.current.getBounds();
+        const minLat = bounds._min.y;
+        const maxLat = bounds._max.y;
+        const minLng = bounds._min.x;
+        const maxLng = bounds._max.x;
 
         try {
+            let query: any;
+
             if (selectedCategory === 'EMERGENCY') {
-                const { data: hospitals } = await supabase.from('emergency_hospitals').select('*');
-                data = hospitals || [];
+                query = supabase.from('emergency_hospitals').select('*');
             } else if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
-                const { data: stores } = await supabase.from('emergency_stores').select('*').eq('type', selectedCategory);
-                data = stores || [];
+                query = supabase.from('emergency_stores').select('*').eq('type', selectedCategory);
             } else if (selectedCategory === 'AED') {
-                const { data: aeds } = await supabase.from('aeds').select('*');
-                data = aeds || [];
+                query = supabase.from('aeds').select('*');
             } else if (selectedCategory === 'FAVORITES') {
                 data = useSosStore.getState().favorites;
+                setItems(data);
+                updateMarkers(data);
+                setIsLoading(false);
+                return;
             }
 
-            // 지도 뷰일 때만 전역 상태 업데이트
-            if (viewMode === 'map') {
-                setItems(data);
+            // Apply bounds filter
+            if (query) {
+                query = query.gte('lat', minLat).lte('lat', maxLat)
+                    .gte('lng', minLng).lte('lng', maxLng);
+
+                const { data: result, error } = await query;
+                if (error) throw error;
+                data = result || [];
             }
+
+            // Always update global state regardless of viewMode
+            setItems(data);
 
             // 초기 마커 업데이트 (필터링 없이)
             updateMarkers(data);
         } catch (error) {
             console.error("RawSosMap: Fetch error", error);
+        } finally {
+            setIsLoading(false);
         }
     };
 
+    const searchAddressToCoordinate = (address: string) => {
+        if (!window.naver || !window.naver.maps || !window.naver.maps.Service) return;
+
+        window.naver.maps.Service.geocode({
+            query: address
+        }, function (status: any, response: any) {
+            if (status !== window.naver.maps.Service.Status.OK) {
+                return console.log('Geocode Error');
+            }
+
+            const result = response.v2.addresses[0];
+            if (result) {
+                const point = new window.naver.maps.Point(result.x, result.y);
+                mapInstance.current.setCenter(point);
+                mapInstance.current.setZoom(15);
+            }
+        });
+    };
+
     const getMarkerIcon = (item: any) => {
-        let color = '#EF4444';
-        let icon = '🚨';
         let label = '';
+        let borderColor = '#EF4444'; // Default Red
+        let symbol = '';
+        let symbolColor = '#EF4444';
 
         if (selectedCategory === 'EMERGENCY') {
-            color = item.beds_available > 5 ? '#10B981' : item.beds_available > 0 ? '#F59E0B' : '#EF4444';
-            icon = '🏥';
-            label = item.beds_available.toString();
+            borderColor = '#EF4444'; // Red
+            symbolColor = '#EF4444';
+            symbol = '✚';
         } else if (selectedCategory === 'PHARMACY') {
-            const status = getPharmacyStatus(item);
-            color = status.color;
-            icon = status.icon;
-            if (status.status === 'open') {
-                label = '';
-            }
+            borderColor = '#10B981'; // Green
+            symbolColor = '#10B981';
+            symbol = '💊';
         } else if (selectedCategory === 'ANIMAL_HOSPITAL') {
-            const status = getPharmacyStatus(item);
-            color = status.color;
-            icon = status.status === 'open' ? '🐶' : '😴';
+            borderColor = '#3B82F6'; // Blue
+            symbolColor = '#3B82F6';
+            symbol = '🐶';
         } else if (selectedCategory === 'AED') {
-            color = '#F59E0B';
-            icon = '⚡';
+            borderColor = '#F59E0B'; // Orange
+            symbolColor = '#F59E0B';
+            // Custom SVG for Heart with Lightning Bolt
+            symbol = `
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="${symbolColor}"/>
+                    <path d="M11.5 16l1-5h-2.5l1.5-5-4 5h2.5l-1.5 5h3z" fill="white" stroke="white" stroke-width="1.5"/>
+                </svg>
+            `;
         }
+
+        const content = label || symbol;
 
         return `
             <div class="custom-marker" style="
-                background: white; 
-                padding: 6px 12px; 
-                border-radius: 24px; 
-                border: 2.5px solid ${color};
-                box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+                width: 44px;
+                height: 44px;
+                background: white;
+                border: 4px solid ${borderColor};
+                border-radius: 50%;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.2);
                 display: flex;
                 align-items: center;
-                gap: 6px;
+                justify-content: center;
+                font-size: ${label ? '16px' : '22px'};
                 font-weight: 900;
-                white-space: nowrap;
+                color: ${symbolColor};
                 transition: all 0.2s ease-out;
             ">
-                <span style="font-size: 16px;">${icon}</span>
-                ${label ? `<span style="color: ${color}; font-size: 14px; letter-spacing: -0.5px;">${label}</span>` : ''}
+                ${content}
             </div>
         `;
     };
@@ -217,43 +276,69 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
         }
     };
 
-
     useEffect(() => {
         if (isMapLoaded) {
             fetchData();
         }
     }, [selectedCategory, favorites, isMapLoaded]);
 
+    // Initialize map when script is loaded
+    useEffect(() => {
+        if (isScriptLoaded && !isMapLoaded) {
+            initMap();
+        }
+    }, [isScriptLoaded, isMapLoaded]);
+
     // 검색/필터 변경 시 마커만 업데이트 (데이터 재로딩 없이)
     useEffect(() => {
-        if (isMapLoaded && items.length > 0) {
-            const filtered = items.filter(item => {
-                const name = item.name || item.place_name || '';
-                const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase());
+        if (isMapLoaded) {
+            // Local filtering first
+            if (items.length > 0) {
+                const filtered = items.filter(item => {
+                    const name = item.name || item.place_name || '';
+                    const address = item.address || '';
+                    const roadAddress = item.road_address || '';
+                    const query = searchQuery.toLowerCase();
 
-                if (!matchesSearch) return false;
+                    const matchesSearch =
+                        name.toLowerCase().includes(query) ||
+                        address.toLowerCase().includes(query) ||
+                        roadAddress.toLowerCase().includes(query);
 
-                if (filterOpenNow) {
-                    if (selectedCategory === 'EMERGENCY') return true;
-                    if (item.is_24h) return true;
+                    if (!matchesSearch) return false;
 
-                    if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
-                        const status = getPharmacyStatus(item);
-                        return status.status === 'open' || status.status === 'closing-soon';
+                    if (filterOpenNow) {
+                        if (selectedCategory === 'EMERGENCY') return true;
+                        if (item.is_24h) return true;
+
+                        if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
+                            const status = getPharmacyStatus(item);
+                            return status.status === 'open' || status.status === 'closing-soon';
+                        }
                     }
-                }
 
-                return true;
-            });
+                    return true;
+                });
 
-            updateMarkers(filtered);
+                updateMarkers(filtered);
+            }
+
+            // If search query exists and is long enough, try geocoding
+            if (searchQuery.length > 1) {
+                if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
+                searchDebounceTimer.current = setTimeout(() => {
+                    // Only geocode if we suspect it's a location (simple heuristic or just always try if user pauses)
+                    // For now, let's try geocoding if local results are few or user explicitly types a region name
+                    searchAddressToCoordinate(searchQuery);
+                }, 800);
+            }
         }
     }, [searchQuery, filterOpenNow, items, isMapLoaded]);
 
     return (
         <>
             <Script
-                src={`https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${process.env.NEXT_PUBLIC_NAVER_MAP_CLIENT_ID}`}
+                src={`https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${process.env.NEXT_PUBLIC_NAVER_MAP_CLIENT_ID}&submodules=geocoder`}
                 strategy="afterInteractive"
                 onLoad={() => {
                     console.log("RawSosMap: Naver Maps script loaded");
@@ -261,7 +346,7 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
                     clusterScript.src = 'https://navermaps.github.io/maps.js.ncp/docs/js/MarkerClustering.js';
                     clusterScript.onload = () => {
                         console.log("RawSosMap: MarkerClustering script loaded");
-                        initMap();
+                        setIsScriptLoaded(true);
                     };
                     document.head.appendChild(clusterScript);
                 }}

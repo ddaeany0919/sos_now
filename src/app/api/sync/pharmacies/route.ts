@@ -4,13 +4,15 @@ import { supabase } from '@/lib/supabase';
 
 export async function GET() {
     try {
+        // 1. Fetch from API
         const pharmacyList = await fetchPharmacyList();
         const items = Array.isArray(pharmacyList) ? pharmacyList : [pharmacyList];
 
         if (items.length === 0) {
-            return NextResponse.json({ success: true, count: 0, message: 'No pharmacies found' });
+            return NextResponse.json({ success: true, count: 0, message: 'No pharmacies found (Check API Key or URL)' });
         }
 
+        // 2. Transform Data
         const updates = items.map((item: any) => ({
             type: 'PHARMACY',
             name: item.dutyName,
@@ -30,16 +32,21 @@ export async function GET() {
                 hol: item.dutyTime8s && item.dutyTime8c ? `${item.dutyTime8s}-${item.dutyTime8c}` : null,
             },
             last_verified: new Date().toISOString()
-        }));
+        })).filter((item: any) => item.lat && item.lng);
 
-        // 기존 약국 데이터 삭제 후 재삽입 (중복 방지)
+        // 3. Delete Existing Data
         await supabase.from('emergency_stores').delete().eq('type', 'PHARMACY');
 
-        const { error } = await supabase
-            .from('emergency_stores')
-            .insert(updates);
-
-        if (error) throw error;
+        // 4. Insert New Data (Batch insert)
+        const BATCH_SIZE = 1000;
+        for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+            const batch = updates.slice(i, i + BATCH_SIZE);
+            const { error } = await supabase.from('emergency_stores').insert(batch);
+            if (error) {
+                console.error('Insert Error:', error);
+                throw error;
+            }
+        }
 
         return NextResponse.json({
             success: true,
