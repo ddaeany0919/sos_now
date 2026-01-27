@@ -16,6 +16,14 @@ interface SosStore {
     setSearchQuery: (query: string) => void;
     filterOpenNow: boolean;
     setFilterOpenNow: (open: boolean) => void;
+    distanceFilter: number | 'all';
+    setDistanceFilter: (distance: number | 'all') => void;
+    userLocation: { lat: number; lng: number; accuracy: number; isManual?: boolean } | null;
+    setUserLocation: (location: { lat: number; lng: number; accuracy: number; isManual?: boolean } | null) => void;
+    locationMode: 'auto' | 'manual';
+    setLocationMode: (mode: 'auto' | 'manual') => void;
+    manualLocation: { lat: number; lng: number } | null;
+    setManualLocation: (location: { lat: number; lng: number } | null) => void;
     favorites: any[];
     toggleFavorite: (item: any) => void;
     isLoading: boolean;
@@ -37,11 +45,26 @@ export const useSosStore = create<SosStore>()(
             setSearchQuery: (query) => set({ searchQuery: query }),
             filterOpenNow: false,
             setFilterOpenNow: (open) => set({ filterOpenNow: open }),
+            distanceFilter: 5,
+            setDistanceFilter: (distance) => set({ distanceFilter: distance }),
+            userLocation: null,
+            setUserLocation: (location) => set({ userLocation: location }),
+            locationMode: 'auto',
+            setLocationMode: (mode) => set({ locationMode: mode }),
+            manualLocation: null,
+            setManualLocation: (location) => set({ manualLocation: location }),
             favorites: [],
             toggleFavorite: (item) => set((state) => {
-                const isFav = state.favorites.some(f => f.hp_id === item.hp_id || f.id === item.id);
+                const isFav = state.favorites.some(f =>
+                    (item.hp_id && f.hp_id === item.hp_id) ||
+                    (item.id && f.id === item.id)
+                );
                 if (isFav) {
-                    return { favorites: state.favorites.filter(f => !(f.hp_id === item.hp_id || f.id === item.id)) };
+                    return {
+                        favorites: state.favorites.filter(f =>
+                            !((item.hp_id && f.hp_id === item.hp_id) || (item.id && f.id === item.id))
+                        )
+                    };
                 } else {
                     return { favorites: [...state.favorites, item] };
                 }
@@ -51,7 +74,11 @@ export const useSosStore = create<SosStore>()(
         }),
         {
             name: 'sos-storage',
-            partialize: (state) => ({ favorites: state.favorites }),
+            partialize: (state) => ({
+                favorites: state.favorites,
+                locationMode: state.locationMode,
+                manualLocation: state.manualLocation
+            }),
         }
     )
 );

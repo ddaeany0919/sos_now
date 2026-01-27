@@ -1,431 +1,355 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { Search, Map as MapIcon, List, Bell, Navigation, MapPin, ChevronRight, AlertCircle, ArrowUpDown, X, Settings } from 'lucide-react';
 import RawSosMap from '@/components/RawSosMap';
 import SosBottomSheet from '@/components/SosBottomSheet';
+import LocationSettingModal from '@/components/LocationSettingModal';
 import SplashScreen from '@/components/SplashScreen';
-import { useSosStore, CategoryType } from '@/store/useSosStore';
+import { useSosStore } from '@/store/useSosStore';
 import { getPharmacyStatus } from '@/lib/businessHours';
-import { sortByDistance, formatDistance, getDistance } from '@/lib/distance';
-import {
-    HeartPulse, Pill, Dog, ShieldAlert, Search,
-    List, Map as MapIcon, AlertCircle, Star,
-    MapPin, ChevronRight, Phone, Navigation,
-    X, Settings, Bell, ArrowUpDown
-} from 'lucide-react';
+import { getDistance, sortByDistance, formatDistance, getCurrentLocation } from '@/lib/distance';
+import { fetchHospitalList, fetchRealtimeBeds, fetchPharmacyList, fetchAEDList, fetchAnimalHospitalList } from '@/lib/nemcApi';
+
+const categories = [
+    { id: 'EMERGENCY', label: '응급실', icon: AlertCircle, activeColor: 'bg-red-500' },
+    { id: 'PHARMACY', label: '약국', icon: MapPin, activeColor: 'bg-emerald-500' },
+    { id: 'ANIMAL_HOSPITAL', label: '동물병원', icon: MapPin, activeColor: 'bg-blue-500' },
+    { id: 'AED', label: 'AED', icon: MapPin, activeColor: 'bg-amber-500' },
+    { id: 'FAVORITES', label: '즐겨찾기', icon: Bell, activeColor: 'bg-rose-500' },
+];
 
 export default function MapPage() {
+    const [viewMode, setViewMode] = useState<'map' | 'list'>('map');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [filterOpenNow, setFilterOpenNow] = useState(false);
+    const [distanceFilter, setDistanceFilter] = useState<number | 'all'>(3);
+    const [sortBy, setSortBy] = useState<'distance' | 'name'>('distance');
+    const [showSplash, setShowSplash] = useState(true);
+    const [visibleCount, setVisibleCount] = useState(10);
+    const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
+    const observerTarget = useRef<HTMLDivElement>(null);
+
     const {
         selectedCategory, setSelectedCategory,
-        items, searchQuery, setSearchQuery,
-        setSelectedItem, setBottomSheetOpen,
-        favorites, filterOpenNow, setFilterOpenNow
+        items, setSelectedItem, setBottomSheetOpen,
+        userLocation, setUserLocation, isLoading, setIsLoading, locationMode
     } = useSosStore();
 
-    const [viewMode, setViewMode] = useState<'map' | 'list'>('map');
-    const [isScrolled, setIsScrolled] = useState(false);
-    const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-    const [sortBy, setSortBy] = useState<'distance' | 'name'>('distance');
-    const [isLoading, setIsLoading] = useState(true);
-    const [visibleCount, setVisibleCount] = useState(20);
-    const [showSplash, setShowSplash] = useState(true);
-    const observerTarget = useRef<HTMLDivElement>(null);
+    const [isHoveringLocation, setIsHoveringLocation] = useState(false);
+    const hoverTimeout = useRef<NodeJS.Timeout | null>(null);
+    const lastFetchedCategory = useRef<string | null>(null);
+
+    // Listen for custom event to open location settings
+    useEffect(() => {
+        const handleOpenSettings = () => setIsLocationModalOpen(true);
+        window.addEventListener('openLocationSettings', handleOpenSettings);
+        return () => window.removeEventListener('openLocationSettings', handleOpenSettings);
+    }, []);
 
     // Get user location
     useEffect(() => {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (position) => {
-                    setUserLocation({
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude
-                    });
-                },
-                (error) => console.log('Location error:', error)
-            );
-        }
+        getCurrentLocation()
+            .then(loc => setUserLocation(loc))
+            .catch(err => console.error("Location error:", err));
     }, []);
 
-    // Simulate loading for list view
+    // Fetch data based on category
     useEffect(() => {
-        setIsLoading(true);
-        const timer = setTimeout(() => {
-            setIsLoading(false);
-        }, 500);
-        return () => clearTimeout(timer);
-    }, [selectedCategory, searchQuery, filterOpenNow]);
+        setVisibleCount(10);
+        if (selectedCategory !== 'FAVORITES') {
+            useSosStore.getState().setItems([]);
+        }
 
-    // Reset visible count when filters change
-    useEffect(() => {
-        setVisibleCount(20);
-    }, [selectedCategory, searchQuery, filterOpenNow, sortBy]);
+        const fetchData = async () => {
+            const currentCat = selectedCategory;
+            if (lastFetchedCategory.current === currentCat && items.length > 0) return;
 
-    // Infinite scroll observer
+            setIsLoading(true);
+            try {
+                let data: any[] = [];
+                if (currentCat === 'EMERGENCY') {
+                    const [hospitals, realtime] = await Promise.all([
+                        fetchHospitalList(),
+                        fetchRealtimeBeds()
+                    ]);
+
+                    data = hospitals.map((h: any) => {
+                        const status = realtime.find((r: any) => r.hpid === h.hpid);
+                        return {
+                            ...h,
+                            lat: h.wgs84Lat,
+                            lng: h.wgs84Lon,
+                            name: h.dutyName,
+                            address: h.dutyAddr,
+                            beds_available: status ? status.hvec : 0,
+                            type: 'EMERGENCY'
+                        };
+                    });
+                } else if (currentCat === 'PHARMACY') {
+                    const pharmacies = await fetchPharmacyList();
+                    data = pharmacies.map((p: any) => ({
+                        ...p,
+                        lat: p.wgs84Lat,
+                        lng: p.wgs84Lon,
+                        name: p.dutyName,
+                        address: p.dutyAddr,
+                        type: 'PHARMACY'
+                    }));
+                } else if (currentCat === 'AED') {
+                    const aeds = await fetchAEDList();
+                    data = aeds.map((a: any) => ({
+                        ...a,
+                        lat: a.wgs84Lat,
+                        lng: a.wgs84Lon,
+                        name: a.buildPlace,
+                        address: a.buildAddr,
+                        type: 'AED'
+                    }));
+                } else if (currentCat === 'ANIMAL_HOSPITAL') {
+                    const animals = await fetchAnimalHospitalList();
+                    data = animals.map((a: any) => ({
+                        ...a,
+                        lat: parseFloat(a.lat),
+                        lng: parseFloat(a.lon),
+                        name: a.bplcNm,
+                        address: a.rdnWhlAddr || a.siteWhlAddr,
+                        type: 'ANIMAL_HOSPITAL'
+                    }));
+                } else if (currentCat === 'FAVORITES') {
+                    // Favorites are handled by the store
+                    return;
+                }
+
+                // Only update if the category is still the same
+                if (useSosStore.getState().selectedCategory === currentCat) {
+                    const validData = data.filter(item => item.lat && item.lng);
+                    useSosStore.getState().setItems(validData);
+                    lastFetchedCategory.current = currentCat;
+                }
+            } catch (error) {
+                console.error("Fetch error:", error);
+            } finally {
+                if (useSosStore.getState().selectedCategory === currentCat) {
+                    setIsLoading(false);
+                }
+            }
+        };
+
+        fetchData();
+    }, [selectedCategory]);
+
+    // Infinite scroll for list view
     useEffect(() => {
         const observer = new IntersectionObserver(
             (entries) => {
                 if (entries[0].isIntersecting) {
-                    setVisibleCount((prev) => prev + 20);
+                    setVisibleCount(prev => prev + 10);
                 }
             },
-            { threshold: 0.1 }
+            { threshold: 1.0 }
         );
 
         if (observerTarget.current) {
             observer.observe(observerTarget.current);
         }
 
-        return () => {
-            if (observerTarget.current) {
-                observer.unobserve(observerTarget.current);
-            }
-        };
-    }, [observerTarget.current, isLoading, viewMode]);
+        return () => observer.disconnect();
+    }, [viewMode]);
 
+    const handleMouseEnter = () => {
+        if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+        setIsHoveringLocation(true);
+    };
 
-    // Custom Icon for AED (Heart with Lightning)
-    const HeartLightning = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
-            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M11.5 16l1-5h-2.5l1.5-5-4 5h2.5l-1.5 5h3z" fill="currentColor" stroke="none" />
-        </svg>
-    );
+    const handleMouseLeave = () => {
+        hoverTimeout.current = setTimeout(() => {
+            setIsHoveringLocation(false);
+        }, 5000);
+    };
 
-    const categories: { id: CategoryType; label: string; icon: any; color: string; activeColor: string }[] = [
-        { id: 'EMERGENCY', label: '응급실', icon: HeartPulse, color: 'text-red-500', activeColor: 'bg-red-500' },
-        { id: 'PHARMACY', label: '약국', icon: Pill, color: 'text-emerald-500', activeColor: 'bg-emerald-500' },
-        { id: 'ANIMAL_HOSPITAL', label: '동물병원', icon: Dog, color: 'text-blue-500', activeColor: 'bg-blue-500' },
-        { id: 'AED', label: 'AED', icon: HeartLightning, color: 'text-amber-500', activeColor: 'bg-amber-500' },
-        { id: 'FAVORITES', label: '즐겨찾기', icon: Star, color: 'text-yellow-500', activeColor: 'bg-yellow-500' },
-    ];
+    const handleCenterToUser = () => {
+        window.dispatchEvent(new CustomEvent('centerToUser'));
+    };
 
-    const filteredItems = (selectedCategory === 'FAVORITES' ? favorites : items).filter(item => {
-        const name = item.name || item.place_name || '';
-        const address = item.address || '';
-        const roadAddress = item.road_address || '';
-        const query = searchQuery.toLowerCase();
+    const filteredItems = items.filter(item => {
+        // Ensure item matches selected category (except for Favorites)
+        if (selectedCategory !== 'FAVORITES' && item.type !== selectedCategory) return false;
 
-        const matchesSearch =
-            name.toLowerCase().includes(query) ||
-            address.toLowerCase().includes(query) ||
-            roadAddress.toLowerCase().includes(query);
-
+        const matchesSearch = (item.name || item.place_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (item.address || '').toLowerCase().includes(searchQuery.toLowerCase());
         if (!matchesSearch) return false;
 
+        if (distanceFilter !== 'all' && userLocation) {
+            const dist = getDistance(userLocation.lat, userLocation.lng, item.lat, item.lng);
+            if (dist > (distanceFilter as number)) return false;
+        }
+
         if (filterOpenNow) {
-            // Emergency hospitals are usually 24/7
             if (selectedCategory === 'EMERGENCY') return true;
-
-            // For others, check business_hours
             if (item.is_24h) return true;
-
             if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
                 const status = getPharmacyStatus(item);
                 return status.status === 'open' || status.status === 'closing-soon';
             }
-
-            if (item.business_hours) {
-                try {
-                    const now = new Date();
-                    const currentTime = now.getHours() * 60 + now.getMinutes();
-
-                    const [start, end] = item.business_hours.split(' - ');
-                    const [startH, startM] = start.split(':').map(Number);
-                    const [endH, endM] = end.split(':').map(Number);
-
-                    const startTime = startH * 60 + startM;
-                    const endTime = endH * 60 + endM;
-
-                    return currentTime >= startTime && currentTime <= endTime;
-                } catch (e) {
-                    return true; // If parsing fails, show it
-                }
-            }
         }
-
         return true;
     });
 
-    // Sort items
     const sortedItems = (() => {
         let sorted = [...filteredItems];
-
         if (sortBy === 'distance' && userLocation) {
             sorted = sortByDistance(sorted, userLocation.lat, userLocation.lng);
         } else if (sortBy === 'name') {
-            sorted.sort((a, b) => {
-                const nameA = (a.name || a.place_name || '').toLowerCase();
-                const nameB = (b.name || b.place_name || '').toLowerCase();
-                return nameA.localeCompare(nameB);
-            });
+            sorted.sort((a, b) => (a.name || a.place_name || '').localeCompare(b.name || b.place_name || ''));
         }
-
         return sorted;
     })();
 
     return (
         <div className="relative h-screen w-full overflow-hidden bg-slate-50 font-sans selection:bg-red-100 selection:text-red-600">
             {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
+
             {/* Floating Header */}
-            <div className="absolute left-0 right-0 top-0 z-50 p-4 md:p-6 pointer-events-none">
-                <div className="mx-auto max-w-2xl space-y-4 pointer-events-auto">
-                    {/* Search Bar Area */}
-                    <div className="relative flex items-center gap-3">
-                        <div className="group relative flex flex-1 flex-col">
-                            <div className="flex items-center gap-3 rounded-[24px] glass px-5 py-4 shadow-2xl transition-all focus-within:ring-2 focus-within:ring-red-500/20">
-                                <Search className="text-slate-400 group-focus-within:text-red-500 transition-colors" size={22} />
-                                <input
-                                    type="text"
-                                    placeholder="병원, 약국, 지역 검색..."
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full bg-transparent text-lg font-semibold text-slate-900 outline-none placeholder:text-slate-400"
-                                />
-                                {searchQuery && (
-                                    <button onClick={() => setSearchQuery('')} className="p-1 hover:bg-slate-100 rounded-full text-slate-400">
-                                        <X size={18} />
-                                    </button>
-                                )}
-                            </div>
+            <div className="absolute left-0 right-0 top-0 z-50 pointer-events-none">
+                <div className={`absolute inset-0 bg-slate-50/90 backdrop-blur-xl transition-opacity duration-300 ${viewMode === 'list' ? 'opacity-100' : 'opacity-0'}`} />
 
-                            {/* Search Autocomplete Dropdown */}
-                            {searchQuery && filteredItems.length > 0 && viewMode === 'map' && (
-                                <div className="absolute top-full left-0 right-0 mt-2 glass rounded-3xl shadow-2xl overflow-hidden max-h-96 overflow-y-auto z-[60]">
-                                    <div className="p-2">
-                                        <div className="text-xs font-bold text-slate-500 px-4 py-2">
-                                            검색 결과 {filteredItems.length}개
-                                        </div>
-                                        {filteredItems.slice(0, 5).map((item, index) => {
-                                            const status = (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL')
-                                                ? getPharmacyStatus(item)
-                                                : null;
-                                            const distance = userLocation
-                                                ? formatDistance(getDistance(userLocation.lat, userLocation.lng, item.lat, item.lng))
-                                                : null;
-
-                                            return (
-                                                <button
-                                                    key={item.id || index}
-                                                    onClick={() => {
-                                                        setSelectedItem(item);
-                                                        setBottomSheetOpen(true);
-                                                    }}
-                                                    className="w-full text-left px-4 py-3 hover:bg-white/50 rounded-2xl transition-all"
-                                                >
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="font-bold text-slate-900 truncate">
-                                                                {item.name || item.place_name}
-                                                            </div>
-                                                            <div className="text-xs text-slate-500 truncate mt-1">
-                                                                {item.address || item.road_address}
-                                                            </div>
-                                                        </div>
-                                                        <div className="flex items-center gap-2 flex-shrink-0">
-                                                            {status && (
-                                                                <span className="text-xs font-bold px-2 py-1 rounded-full" style={{
-                                                                    backgroundColor: status.color + '20',
-                                                                    color: status.textColor
-                                                                }}>
-                                                                    {status.icon}
-                                                                </span>
-                                                            )}
-                                                            {distance && (
-                                                                <span className="text-xs font-bold text-slate-500">
-                                                                    📍 {distance}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </button>
-                                            );
-                                        })}
-                                        {filteredItems.length > 5 && (
-                                            <div className="px-4 py-2 text-xs text-center text-slate-500">
-                                                +{filteredItems.length - 5}개 더 있음 (리스트 뷰에서 확인)
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
+                <div className="relative mx-auto max-w-2xl p-4 space-y-3 pointer-events-auto">
+                    {/* Search & Mode Toggle */}
+                    <div className="flex items-center gap-2">
+                        <div className="flex-1 flex items-center gap-3 rounded-2xl glass px-4 py-3 shadow-xl focus-within:ring-2 focus-within:ring-red-500/20">
+                            <Search className="text-slate-400" size={20} />
+                            <input
+                                type="text"
+                                placeholder="병원, 약국, 지역 검색..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full bg-transparent text-base font-bold text-slate-900 outline-none placeholder:text-slate-400"
+                            />
+                            {searchQuery && (
+                                <button onClick={() => setSearchQuery('')} className="p-1 text-slate-400 hover:bg-slate-100 rounded-full">
+                                    <X size={16} />
+                                </button>
                             )}
                         </div>
-
                         <button
                             onClick={() => setViewMode(viewMode === 'map' ? 'list' : 'map')}
-                            className="flex h-[60px] w-[60px] items-center justify-center rounded-[24px] glass text-slate-600 hover:text-red-500 transition-all hover:scale-105 active:scale-95 shadow-xl"
+                            className="h-[52px] w-[52px] flex items-center justify-center rounded-2xl glass text-slate-600 shadow-xl hover:text-red-500 transition-all"
                         >
-                            {viewMode === 'map' ? <List size={24} /> : <MapIcon size={24} />}
+                            {viewMode === 'map' ? <List size={22} /> : <MapIcon size={22} />}
                         </button>
                     </div>
 
-                    {/* Category Pills & Filters */}
-                    <div className="flex flex-col gap-3">
-                        <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                    {/* Filters Row */}
+                    <div className="space-y-2">
+                        <div className="flex gap-2 overflow-x-auto no-scrollbar">
                             {categories.map((cat) => (
                                 <button
                                     key={cat.id}
                                     onClick={() => setSelectedCategory(cat.id)}
-                                    className={`flex items-center gap-2 whitespace-nowrap rounded-full px-6 py-3 text-sm font-black transition-all shadow-lg ${selectedCategory === cat.id
-                                        ? `${cat.activeColor} text-white scale-105 ring-4 ring-white/30`
-                                        : 'glass text-slate-600 hover:bg-white'
-                                        }`}
+                                    className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-[11px] font-black transition-all shadow-md ${selectedCategory === cat.id ? `${cat.activeColor} text-white` : 'glass text-slate-600'}`}
                                 >
-                                    <cat.icon size={18} className={selectedCategory === cat.id ? 'text-white' : cat.color} />
-                                    {cat.label}
+                                    <cat.icon size={12} /> {cat.label}
                                 </button>
                             ))}
                         </div>
-
-                        {/* Quick Filters */}
-                        <div className="flex gap-2">
+                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                             <button
                                 onClick={() => setFilterOpenNow(!filterOpenNow)}
-                                className={`flex items-center gap-2 rounded-full px-4 py-2 text-xs font-black transition-all shadow-md ${filterOpenNow ? 'bg-slate-900 text-white' : 'glass text-slate-600'}`}
+                                className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[10px] font-black transition-all shadow-sm ${filterOpenNow ? 'bg-slate-900 text-white' : 'glass text-slate-600'}`}
                             >
-                                <div className={`h-2 w-2 rounded-full ${filterOpenNow ? 'bg-emerald-400 animate-pulse' : 'bg-slate-300'}`} />
-                                영업중
+                                <div className={`h-1 w-1 rounded-full ${filterOpenNow ? 'bg-emerald-400 animate-pulse' : 'bg-slate-300'}`} /> 영업중
                             </button>
+                            <div className="h-3 w-[1px] bg-slate-200 shrink-0" />
+                            {[1, 3, 5, 10, 'all'].map((dist) => (
+                                <button
+                                    key={dist}
+                                    onClick={() => setDistanceFilter(dist as any)}
+                                    className={`whitespace-nowrap rounded-full px-3 py-1.5 text-[10px] font-black transition-all shadow-sm ${distanceFilter === dist ? 'bg-slate-900 text-white' : 'glass text-slate-600'}`}
+                                >
+                                    {dist === 'all' ? '전체' : `${dist}km`}
+                                </button>
+                            ))}
                         </div>
                     </div>
                 </div>
             </div>
 
-            {/* Main Content Area */}
+            {/* Main Content */}
             <div className="h-full w-full">
+                {/* Map View */}
                 <div className={`h-full w-full ${viewMode === 'map' ? 'block' : 'hidden'}`}>
                     <RawSosMap searchQuery={searchQuery} filterOpenNow={filterOpenNow} viewMode={viewMode} />
-
-                    {/* Map Overlay Warning */}
-                    <div className="absolute bottom-32 left-0 right-0 z-10 px-4 pointer-events-none">
-                        <div className="mx-auto max-w-md rounded-2xl glass-dark p-4 text-center shadow-2xl border-white/5">
-                            <div className="flex items-center justify-center gap-2 text-white font-bold text-sm">
-                                <AlertCircle size={18} className="text-red-400" />
-                                방문 전 반드시 전화로 확인하세요
+                    <div className="absolute bottom-28 left-0 right-0 z-10 px-4 pointer-events-none">
+                        <div className="mx-auto max-w-[240px] rounded-xl bg-slate-900/80 backdrop-blur-md p-2 text-center shadow-2xl border border-white/10">
+                            <div className="flex items-center justify-center gap-1.5 text-white font-bold text-[10px]">
+                                <AlertCircle size={12} className="text-red-400" /> 방문 전 반드시 전화로 확인하세요
                             </div>
                         </div>
                     </div>
                 </div>
 
+                {/* List View */}
                 {viewMode === 'list' && (
-                    <div className="h-full w-full overflow-y-auto bg-slate-50 px-4 pt-56 pb-32 no-scrollbar">
-                        <div className="mx-auto max-w-2xl space-y-6">
-                            {/* List Header */}
-                            <div className="flex items-center justify-between px-2">
-                                <h2 className="text-2xl font-black text-slate-900">
-                                    {categories.find(c => c.id === selectedCategory)?.label} 목록
-                                    <span className="ml-2 text-sm font-bold text-slate-400">{sortedItems.length}개</span>
-                                </h2>
-                                <button
-                                    onClick={() => setSortBy(sortBy === 'distance' ? 'name' : 'distance')}
-                                    className="flex items-center gap-1 px-3 py-2 rounded-full glass text-xs font-bold text-slate-600 hover:bg-white transition-colors"
-                                >
-                                    <ArrowUpDown size={14} />
-                                    {sortBy === 'distance' ? '거리순' : '이름순'}
-                                </button>
-                            </div>
-
-                            {/* List Items */}
+                    <div className="h-full w-full overflow-y-auto bg-slate-50 px-4 pt-[200px] pb-32 no-scrollbar scroll-smooth">
+                        <div className="mx-auto max-w-2xl space-y-4">
                             {isLoading ? (
-                                <div className="grid gap-4">
-                                    {[...Array(5)].map((_, i) => (
-                                        <div key={i} className="h-32 w-full rounded-[32px] bg-white p-6 shadow-sm border border-slate-100">
-                                            <div className="flex gap-4 animate-pulse">
-                                                <div className="flex-1 space-y-3">
-                                                    <div className="h-6 w-3/4 rounded-full bg-slate-200"></div>
-                                                    <div className="h-4 w-1/2 rounded-full bg-slate-100"></div>
-                                                    <div className="flex gap-2 pt-2">
-                                                        <div className="h-6 w-16 rounded-full bg-slate-100"></div>
-                                                        <div className="h-6 w-16 rounded-full bg-slate-100"></div>
-                                                    </div>
-                                                </div>
-                                                <div className="h-12 w-12 rounded-2xl bg-slate-100"></div>
-                                            </div>
-                                        </div>
+                                <div className="space-y-4">
+                                    {[...Array(3)].map((_, i) => (
+                                        <div key={i} className="h-28 w-full rounded-3xl bg-white animate-pulse shadow-sm border border-slate-100" />
                                     ))}
                                 </div>
                             ) : sortedItems.length > 0 ? (
-                                <div className="grid gap-4">
-                                    {sortedItems.slice(0, visibleCount).map((item) => {
-                                        const status = (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL')
-                                            ? getPharmacyStatus(item)
-                                            : null;
-
-                                        return (
-                                            <div
-                                                key={item.hp_id || item.id}
-                                                onClick={() => {
-                                                    setSelectedItem(item);
-                                                    setBottomSheetOpen(true);
-                                                }}
-                                                className="group relative overflow-hidden rounded-[32px] bg-white p-6 shadow-sm border border-slate-100 transition-all hover:shadow-xl hover:-translate-y-1 active:scale-[0.98] cursor-pointer"
-                                            >
-                                                <div className="flex justify-between items-start">
-                                                    <div className="flex-1">
-                                                        <div className="flex items-center gap-2 mb-3 flex-wrap">
-                                                            <h3 className="text-xl font-black text-slate-900 tracking-tight">{item.name || item.place_name}</h3>
-                                                            {item.beds_available !== undefined && (
-                                                                <span className={`px-3 py-1 rounded-full text-xs font-black ${item.beds_available > 5 ? 'bg-emerald-100 text-emerald-700' :
-                                                                    item.beds_available > 0 ? 'bg-amber-100 text-amber-700' :
-                                                                        'bg-red-100 text-red-700'
-                                                                    }`}>
-                                                                    병상 {item.beds_available}
-                                                                </span>
-                                                            )}
-                                                            {status && (
-                                                                <span className="px-3 py-1 rounded-full text-xs font-black" style={{
-                                                                    backgroundColor: `${status.color}20`,
-                                                                    color: status.textColor
-                                                                }}>
-                                                                    {status.icon} {status.message}
-                                                                </span>
-                                                            )}
-                                                            {userLocation && item.distance !== undefined && (
-                                                                <span className="px-3 py-1 rounded-full text-xs font-black bg-blue-100 text-blue-700">
-                                                                    📍 {formatDistance(item.distance)}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                        <div className="space-y-2">
-                                                            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
-                                                                <MapPin size={16} className="shrink-0 text-slate-300" />
-                                                                <span className="truncate">{item.address}</span>
+                                <>
+                                    <div className="flex items-center justify-between px-2 mb-2">
+                                        <h2 className="text-lg font-black text-slate-900">{categories.find(c => c.id === selectedCategory)?.label} {sortedItems.length}개</h2>
+                                        <button onClick={() => setSortBy(sortBy === 'distance' ? 'name' : 'distance')} className="flex items-center gap-1 text-[10px] font-black text-slate-500 glass px-2 py-1 rounded-lg">
+                                            <ArrowUpDown size={10} /> {sortBy === 'distance' ? '거리순' : '이름순'}
+                                        </button>
+                                    </div>
+                                    <div className="grid gap-3">
+                                        {sortedItems.slice(0, visibleCount).map((item, index) => {
+                                            const status = (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL' || (selectedCategory === 'FAVORITES' && (item.type === 'PHARMACY' || item.type === 'ANIMAL_HOSPITAL'))) ? getPharmacyStatus(item) : null;
+                                            let itemCat = categories.find(c => c.id === selectedCategory);
+                                            if (selectedCategory === 'FAVORITES') {
+                                                if (item.hp_id) itemCat = categories.find(c => c.id === 'EMERGENCY');
+                                                else if (item.type === 'PHARMACY') itemCat = categories.find(c => c.id === 'PHARMACY');
+                                                else if (item.type === 'ANIMAL_HOSPITAL') itemCat = categories.find(c => c.id === 'ANIMAL_HOSPITAL');
+                                                else itemCat = categories.find(c => c.id === 'AED');
+                                            }
+                                            const isAed = itemCat?.id === 'AED';
+                                            return (
+                                                <div key={item.hp_id || item.id || index} onClick={() => { setSelectedItem(item); setBottomSheetOpen(true); }} className="group relative overflow-hidden rounded-3xl bg-white p-5 shadow-sm border border-slate-100 transition-all hover:shadow-md active:scale-[0.98] cursor-pointer">
+                                                    <div className="flex justify-between items-start gap-4">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                                                <h3 className="text-base font-black text-slate-900 truncate">{isAed ? item.address : (item.name || item.place_name)}</h3>
+                                                                {selectedCategory === 'FAVORITES' && itemCat && <span className={`rounded-full px-1.5 py-0.5 text-[8px] font-black ${itemCat.activeColor} text-white`}>{itemCat.label}</span>}
                                                             </div>
-                                                            <div className="flex gap-2">
-                                                                {item.phone && (
-                                                                    <div className="flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-600">
-                                                                        <Phone size={12} />
-                                                                        {item.phone}
-                                                                    </div>
-                                                                )}
-                                                                {item.is_24h && (
-                                                                    <div className="flex items-center gap-1.5 rounded-full bg-purple-50 px-3 py-1 text-xs font-bold text-purple-600">
-                                                                        24시간
-                                                                    </div>
-                                                                )}
+                                                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mb-2">
+                                                                <MapPin size={12} className="shrink-0" /> <span className="truncate">{isAed ? item.place_name : item.address}</span>
+                                                            </div>
+                                                            <div className="flex gap-1.5 flex-wrap">
+                                                                {userLocation && item.distance !== undefined && <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-blue-50 text-blue-600">📍 {formatDistance(item.distance)}</span>}
+                                                                {status && <span className="px-2 py-0.5 rounded-full text-[9px] font-black" style={{ backgroundColor: `${status.color}15`, color: status.textColor }}>{status.icon} {status.message}</span>}
+                                                                {item.beds_available !== undefined && <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${item.beds_available > 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>병상 {item.beds_available}</span>}
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-50 text-slate-300 group-hover:bg-red-500 group-hover:text-white transition-all shadow-inner">
-                                                        <ChevronRight size={24} />
+                                                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-300 group-hover:bg-red-500 group-hover:text-white transition-all">
+                                                            <ChevronRight size={20} />
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        );
-                                    })}
-                                    {/* Sentinel for Infinite Scroll */}
-                                    {visibleCount < sortedItems.length && (
-                                        <div ref={observerTarget} className="h-10 w-full flex items-center justify-center">
-                                            <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500"></div>
-                                        </div>
-                                    )}
-                                </div>
-                            ) : (
-                                <div className="py-32 text-center">
-                                    <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-[40px] bg-slate-100 text-slate-300 animate-pulse">
-                                        <Search size={48} />
+                                            );
+                                        })}
+                                        {visibleCount < sortedItems.length && <div ref={observerTarget} className="h-10 flex items-center justify-center"><div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500" /></div>}
                                     </div>
-                                    <p className="text-xl font-black text-slate-900">검색 결과가 없습니다</p>
-                                    <p className="text-slate-400 font-medium mt-2">다른 검색어나 카테고리를 선택해보세요</p>
+                                </>
+                            ) : (
+                                <div className="flex flex-col items-center justify-center py-20 text-center">
+                                    <div className="mb-4 h-12 w-12 flex items-center justify-center rounded-full bg-slate-100 text-slate-400"><Search size={24} /></div>
+                                    <h3 className="text-base font-bold text-slate-900">검색 결과가 없습니다</h3>
+                                    <button onClick={() => { setSearchQuery(''); setDistanceFilter('all'); setFilterOpenNow(false); }} className="mt-4 rounded-full bg-slate-900 px-5 py-2 text-xs font-bold text-white shadow-lg">필터 초기화</button>
                                 </div>
                             )}
                         </div>
@@ -433,20 +357,51 @@ export default function MapPage() {
                 )}
             </div>
 
-            {/* Bottom Sheet */}
+            <LocationSettingModal isOpen={isLocationModalOpen} onClose={() => setIsLocationModalOpen(false)} />
             <SosBottomSheet />
 
-            {/* Floating Action Buttons */}
-            <div className="absolute bottom-10 right-6 z-40 flex flex-col gap-4">
-                <button className="flex h-14 w-14 items-center justify-center rounded-2xl glass text-slate-600 shadow-2xl hover:text-red-500 transition-all hover:scale-110 active:scale-95">
-                    <Bell size={24} />
+            {/* Floating Buttons Stack */}
+            <div className="absolute bottom-8 right-6 z-40 flex flex-col items-center gap-4">
+                {/* Location Button with Tooltip */}
+                <div className="relative flex flex-col items-center">
+                    <div
+                        onMouseEnter={handleMouseEnter}
+                        onMouseLeave={handleMouseLeave}
+                        className={`absolute bottom-full right-0 mb-3 transition-all duration-300 ${isHoveringLocation ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'}`}
+                    >
+                        <div className="bg-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-100 flex flex-col items-center gap-2 min-w-[100px]">
+                            <span className="text-[11px] font-bold text-slate-900 text-center leading-tight">위치가<br />다른가요?</span>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsLocationModalOpen(true);
+                                    setIsHoveringLocation(false);
+                                }}
+                                className="text-[10px] font-black text-blue-600 hover:text-blue-700 bg-blue-50 px-3 py-1.5 rounded-full transition-colors"
+                            >
+                                위치 설정
+                            </button>
+                        </div>
+                        <div className="absolute -bottom-1 right-5 w-2.5 h-2.5 bg-white border-r border-b border-slate-100 rotate-45"></div>
+                    </div>
+
+                    <button
+                        onClick={handleCenterToUser}
+                        onMouseEnter={handleMouseEnter}
+                        onMouseLeave={handleMouseLeave}
+                        className="h-12 w-12 flex items-center justify-center rounded-2xl bg-white shadow-xl border border-slate-100 text-slate-600 hover:text-blue-600 transition-all active:scale-95"
+                    >
+                        <Navigation size={22} className={locationMode === 'auto' ? 'fill-blue-600 text-blue-600' : ''} />
+                    </button>
+                </div>
+
+                <button className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white shadow-xl border border-slate-100 text-slate-600 hover:text-red-500 transition-all">
+                    <Bell size={22} />
                 </button>
-                <a
-                    href="tel:119"
-                    className="group relative flex h-20 w-20 items-center justify-center rounded-[32px] bg-red-600 text-white shadow-[0_20px_50px_rgba(239,68,68,0.4)] transition-all hover:scale-110 active:scale-95"
-                >
-                    <div className="absolute inset-0 rounded-[32px] bg-red-600 animate-ping opacity-20 group-hover:opacity-40"></div>
-                    <span className="relative text-2xl font-black tracking-tighter">119</span>
+
+                <a href="tel:119" className="group relative flex h-16 w-16 items-center justify-center rounded-2xl bg-red-600 text-white shadow-[0_10px_30px_rgba(239,68,68,0.4)] transition-all active:scale-95">
+                    <div className="absolute inset-0 rounded-2xl bg-red-600 animate-ping opacity-20"></div>
+                    <span className="relative text-xl font-black">119</span>
                 </a>
             </div>
         </div>

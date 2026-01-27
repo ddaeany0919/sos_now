@@ -93,28 +93,73 @@ export function filterByRadius(
 /**
  * 현재 위치 가져오기 (Promise)
  */
-export function getCurrentLocation(): Promise<{ lat: number; lng: number }> {
+export function getCurrentLocation(): Promise<{ lat: number; lng: number; accuracy: number }> {
     return new Promise((resolve, reject) => {
         if (!navigator.geolocation) {
             reject(new Error('Geolocation is not supported by this browser.'));
             return;
         }
 
+        const options = {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        };
+
         navigator.geolocation.getCurrentPosition(
             position => {
                 resolve({
                     lat: position.coords.latitude,
-                    lng: position.coords.longitude
+                    lng: position.coords.longitude,
+                    accuracy: position.coords.accuracy
                 });
             },
             error => {
-                reject(error);
+                // If high accuracy fails, try once more with low accuracy
+                if (error.code === error.TIMEOUT || error.code === error.PERMISSION_DENIED) {
+                    reject(error);
+                } else {
+                    navigator.geolocation.getCurrentPosition(
+                        pos => resolve({
+                            lat: pos.coords.latitude,
+                            lng: pos.coords.longitude,
+                            accuracy: pos.coords.accuracy
+                        }),
+                        err => reject(err),
+                        { ...options, enableHighAccuracy: false }
+                    );
+                }
             },
-            {
-                enableHighAccuracy: true,
-                timeout: 5000,
-                maximumAge: 0
-            }
+            options
         );
     });
+}
+
+/**
+ * 실시간 위치 추적 시작
+ */
+export function watchLocation(
+    onSuccess: (loc: { lat: number; lng: number; accuracy: number }) => void,
+    onError: (error: GeolocationPositionError) => void
+): number {
+    if (!navigator.geolocation) {
+        onError({ code: 0, message: 'Geolocation not supported' } as GeolocationPositionError);
+        return 0;
+    }
+
+    return navigator.geolocation.watchPosition(
+        position => {
+            onSuccess({
+                lat: position.coords.latitude,
+                lng: position.coords.longitude,
+                accuracy: position.coords.accuracy
+            });
+        },
+        onError,
+        {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        }
+    );
 }

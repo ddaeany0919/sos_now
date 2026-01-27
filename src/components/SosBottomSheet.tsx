@@ -29,7 +29,10 @@ export default function SosBottomSheet() {
 
     console.log('SosBottomSheet selectedItem:', selectedItem);
 
-    const isFav = favorites.some(f => f.hp_id === selectedItem.hp_id || f.id === selectedItem.id);
+    const isFav = favorites.some(f =>
+        (selectedItem.hp_id && f.hp_id === selectedItem.hp_id) ||
+        (selectedItem.id && f.id === selectedItem.id)
+    );
 
     const getStatusColor = (beds: number) => {
         if (beds > 5) return 'text-emerald-600 bg-emerald-500/10 border-emerald-500/20';
@@ -37,8 +40,11 @@ export default function SosBottomSheet() {
         return 'text-red-600 bg-red-500/10 border-red-500/20';
     };
 
-    const name = selectedItem.name || selectedItem.place_name;
-    const address = selectedItem.address;
+    const isAed = selectedCategory === 'AED' || (selectedCategory === 'FAVORITES' && !selectedItem.hp_id && selectedItem.type !== 'PHARMACY' && selectedItem.type !== 'ANIMAL_HOSPITAL');
+
+    const name = isAed ? selectedItem.address : (selectedItem.name || selectedItem.place_name);
+    const address = isAed ? selectedItem.place_name : selectedItem.address;
+    const actualAddress = selectedItem.address; // For copying
     const phone = selectedItem.emergency_phone || selectedItem.phone || selectedItem.manager_phone;
 
     return (
@@ -59,20 +65,35 @@ export default function SosBottomSheet() {
                 <div className="mb-8 flex items-start justify-between">
                     <div className="flex-1 pr-4">
                         <div className="flex items-center gap-3 mb-2">
-                            <h2 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight leading-tight">{name}</h2>
+                            <h2 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight leading-tight">
+                                {name}
+                                {isAed && (
+                                    <button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(actualAddress);
+                                            setShowToast(true);
+                                        }}
+                                        className="inline-flex ml-2 rounded-full p-1.5 hover:bg-slate-100 text-slate-400 transition-colors align-middle"
+                                    >
+                                        <Copy size={16} />
+                                    </button>
+                                )}
+                            </h2>
                         </div>
                         <div className="flex items-center gap-2 text-slate-500 font-bold">
                             <MapPin size={16} className="shrink-0 text-red-500" />
                             <p className="text-xs md:text-sm">{address}</p>
-                            <button
-                                onClick={() => {
-                                    navigator.clipboard.writeText(address);
-                                    setShowToast(true);
-                                }}
-                                className="ml-1 rounded-full p-1 hover:bg-slate-100 text-slate-400 transition-colors"
-                            >
-                                <Copy size={12} />
-                            </button>
+                            {!isAed && (
+                                <button
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(actualAddress);
+                                        setShowToast(true);
+                                    }}
+                                    className="ml-1 rounded-full p-1 hover:bg-slate-100 text-slate-400 transition-colors"
+                                >
+                                    <Copy size={12} />
+                                </button>
+                            )}
                             {showToast && (
                                 <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full bg-slate-900/90 px-4 py-2 text-sm font-bold text-white shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-4 duration-300 whitespace-nowrap">
                                     <Check size={16} className="text-emerald-400" />
@@ -186,8 +207,8 @@ export default function SosBottomSheet() {
 
                     {/* Quick Info Grid */}
                     <div className="grid grid-cols-3 gap-3">
-                        <div className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/40 p-3 text-slate-400 border border-white/20">
-                            <ShieldCheck size={18} />
+                        <div className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-emerald-50/50 p-3 text-emerald-600 border border-emerald-100/50">
+                            <ShieldCheck size={18} className="text-emerald-500" />
                             <span className="text-[8px] font-black uppercase tracking-widest">인증됨</span>
                         </div>
                         <button
@@ -208,18 +229,18 @@ export default function SosBottomSheet() {
                                     console.log('Share failed:', err);
                                 }
                             }}
-                            className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/40 p-3 text-slate-400 hover:text-slate-600 hover:bg-white/60 transition-colors border border-white/20 cursor-pointer"
+                            className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-blue-50/50 p-3 text-blue-600 border border-blue-100/50 hover:bg-blue-100/50 transition-colors cursor-pointer"
                         >
-                            <Share2 size={18} />
+                            <Share2 size={18} className="text-blue-500" />
                             <span className="text-[8px] font-black uppercase tracking-widest">공유</span>
                         </button>
                         <a
                             href={`https://map.naver.com/v5/search/${encodeURIComponent(name)}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/40 p-3 text-slate-400 hover:text-slate-600 hover:bg-white/60 transition-colors border border-white/20"
+                            className="flex flex-col items-center justify-center gap-1.5 rounded-2xl bg-violet-50/50 p-3 text-violet-600 border border-violet-100/50 hover:bg-violet-100/50 transition-colors"
                         >
-                            <ExternalLink size={18} />
+                            <ExternalLink size={18} className="text-violet-500" />
                             <span className="text-[8px] font-black uppercase tracking-widest">정보</span>
                         </a>
                     </div>

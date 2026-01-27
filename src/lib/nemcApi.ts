@@ -150,11 +150,16 @@ export async function fetchAnimalHospitalList(city: string = '서울특별시', 
     const finalUrl = `${ANIMAL_URL}?serviceKey=${SERVICE_KEY}&${params.toString()}`;
 
     console.log('Fetching Animal Hospitals from:', finalUrl);
-    const response = await fetch(finalUrl);
-    const xmlData = await response.text();
-    const result = parser.parse(xmlData);
+    try {
+        const response = await fetch(finalUrl);
+        const xmlData = await response.text();
+        const result = parser.parse(xmlData);
 
-    const items = result.response?.body?.items?.item || [];
-    console.log(`Real API Response: Fetched ${Array.isArray(items) ? items.length : (items ? 1 : 0)} Animal Hospitals`);
-    return items;
+        const items = result.response?.body?.items?.item || [];
+        console.log(`Real API Response: Fetched ${Array.isArray(items) ? items.length : (items ? 1 : 0)} Animal Hospitals`);
+        return items;
+    } catch (error) {
+        console.error('Animal Hospital Fetch Error:', error);
+        return [];
+    }
 }

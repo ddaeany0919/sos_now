@@ -3,8 +3,15 @@
 import { useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
 import { useSosStore } from '@/store/useSosStore';
-import { supabase } from '@/lib/supabase';
 import { getPharmacyStatus } from '@/lib/businessHours';
+import { getDistance, getCurrentLocation } from '@/lib/distance';
+import { MapPin, Navigation } from 'lucide-react';
+
+interface RawSosMapProps {
+    searchQuery: string;
+    filterOpenNow: boolean;
+    viewMode: 'map' | 'list';
+}
 
 declare global {
     interface Window {
@@ -13,411 +20,287 @@ declare global {
     }
 }
 
-interface RawSosMapProps {
-    searchQuery?: string;
-    filterOpenNow?: boolean;
-    viewMode?: 'map' | 'list';
-}
-
-export default function RawSosMap({ searchQuery = '', filterOpenNow = false, viewMode = 'map' }: RawSosMapProps) {
+export default function RawSosMap({ searchQuery, filterOpenNow, viewMode }: RawSosMapProps) {
     const mapElement = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<any>(null);
     const markers = useRef<any[]>([]);
-    const clusterInstance = useRef<any>(null);
+    const clusterer = useRef<any>(null);
+    const userMarker = useRef<any>(null);
+    const userAccuracyCircle = useRef<any>(null);
+    const hasAutoCentered = useRef(false);
     const [isMapLoaded, setIsMapLoaded] = useState(false);
     const [isScriptLoaded, setIsScriptLoaded] = useState(false);
-    const { selectedCategory, setSelectedItem, setBottomSheetOpen, items, setItems, favorites, setIsLoading } = useSosStore();
-    const fetchIdRef = useRef(0);
+    const {
+        selectedCategory, setSelectedItem, setBottomSheetOpen,
+        items, userLocation, setUserLocation, locationMode
+    } = useSosStore();
 
-    const debounceTimer = useRef<NodeJS.Timeout | null>(null);
     const searchDebounceTimer = useRef<NodeJS.Timeout | null>(null);
 
-    const initMap = () => {
-        console.log("RawSosMap: initMap called");
-        if (!mapElement.current || !window.naver || !window.naver.maps) {
-            console.log("RawSosMap: Dependencies not ready for initMap");
-            return;
-        }
-
-        if (mapInstance.current) {
-            console.log("RawSosMap: Map already initialized");
-            return;
-        }
+    // Initialize Map
+    useEffect(() => {
+        if (!isScriptLoaded || !mapElement.current || mapInstance.current) return;
 
         const naver = window.naver;
-        const location = new naver.maps.LatLng(37.5665, 126.9780);
         const mapOptions = {
-            center: location,
-            zoom: 14,
+            center: new naver.maps.LatLng(37.5665, 126.9780),
+            zoom: 15,
             minZoom: 7,
-            maxZoom: 19,
             zoomControl: true,
             zoomControlOptions: {
-                position: naver.maps.Position.RIGHT_CENTER,
-                style: naver.maps.ZoomControlStyle.SMALL
+                position: naver.maps.Position.TOP_RIGHT
             },
-            mapTypeControl: false,
+            mapTypeControl: true
         };
 
-        try {
-            mapInstance.current = new naver.maps.Map(mapElement.current, mapOptions);
-            console.log("RawSosMap: Map instance created");
-            setIsMapLoaded(true);
+        mapInstance.current = new naver.maps.Map(mapElement.current, mapOptions);
+        setIsMapLoaded(true);
 
-            // Add click listener to close bottom sheet when clicking on the map
-            naver.maps.Event.addListener(mapInstance.current, 'click', () => {
-                setBottomSheetOpen(false);
-            });
-
-            // Add idle listener for bounds-based fetching
-            naver.maps.Event.addListener(mapInstance.current, 'idle', () => {
-                if (debounceTimer.current) clearTimeout(debounceTimer.current);
-                debounceTimer.current = setTimeout(() => {
-                    fetchData();
-                }, 300);
-            });
-
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition((position) => {
-                    if (!window.naver || !window.naver.maps || !mapInstance.current) return;
-                    const lat = position.coords.latitude;
-                    const lng = position.coords.longitude;
-                    const currentPos = new window.naver.maps.LatLng(lat, lng);
-                    mapInstance.current.setCenter(currentPos);
+        // Handle manual location setting by moving map
+        if (locationMode === 'manual') {
+            naver.maps.Event.addListener(mapInstance.current, 'dragend', () => {
+                const center = mapInstance.current.getCenter();
+                setUserLocation({
+                    lat: center.lat(),
+                    lng: center.lng(),
+                    accuracy: 0,
+                    isManual: true
                 });
-            }
-
-            // Initial fetch
-            try {
-                fetchData();
-            } catch (fdError) {
-                console.error("RawSosMap: Initial fetchData failed", fdError);
-            }
-        } catch (error) {
-            console.error("RawSosMap: Initialization error", error);
-            // Even if map init fails partially, we might want to kill the spinner loop if possible,
-            // but if map instance is null, we can't do much.
-            // If it's authentication error, simple catch won't help much as Naver handles it.
-        }
-    };
-
-    const fetchData = async () => {
-        if (!window.naver || !window.naver.maps || !mapInstance.current) return;
-
-        const currentFetchId = ++fetchIdRef.current;
-        setIsLoading(true);
-        let data: any[] = [];
-        const bounds = mapInstance.current.getBounds();
-        const minLat = bounds._min.y;
-        const maxLat = bounds._max.y;
-        const minLng = bounds._min.x;
-        const maxLng = bounds._max.x;
-
-        try {
-            let query: any;
-
-            if (selectedCategory === 'EMERGENCY') {
-                query = supabase.from('emergency_hospitals').select('*');
-            } else if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
-                query = supabase.from('emergency_stores').select('*').eq('type', selectedCategory);
-            } else if (selectedCategory === 'AED') {
-                // 병원, 의료원, 보건소, 응급실 내의 AED는 제외 (사용자 요청)
-                query = supabase.from('aeds').select('*')
-                    .not('place_name', 'ilike', '%병원%')
-                    .not('place_name', 'ilike', '%의료원%')
-                    .not('place_name', 'ilike', '%보건소%')
-                    .not('place_name', 'ilike', '%장례식장%')
-                    .not('place_name', 'ilike', '%응급%');
-            } else if (selectedCategory === 'FAVORITES') {
-                data = useSosStore.getState().favorites;
-                if (currentFetchId !== fetchIdRef.current) return;
-                setItems(data);
-                updateMarkers(data);
-                setIsLoading(false);
-                return;
-            }
-
-            // Apply bounds filter ONLY if zoomed in sufficiently
-            // If zoomed out (viewing whole country), we fetch ALL data to ensure clusters are correct everywhere.
-            // Zoom level 10 is roughly a province/city level. Zoom 6-7 is whole country.
-            // Let's say if zoom < 12, we fetch EVERYTHING (up to MAX_FETCH).
-            // This ensures "Chak" appearance.
-            const currentZoom = mapInstance.current.getZoom();
-
-            // If query exists (it does)
-            if (query) {
-                // Bounds filter: Only apply if user is zoomed in (Zoom >= 12)
-                // This prevents "Seoul Only" when looking at whole map.
-                if (bounds && currentZoom >= 12) {
-                    query = query.gte('lat', minLat).lte('lat', maxLat)
-                        .gte('lng', minLng).lte('lng', maxLng);
-                } else {
-                    console.log("RawSosMap: Wide Area View (Zoom " + currentZoom + ") - Fetching global data");
-                }
-
-                // Pagination Logic to bypass Supabase 1000 row limit
-                let allData: any[] = [];
-                const PAGE_SIZE = 1000;
-                const MAX_FETCH = 50000; // Increase to 50k to cover almost all AEDs in Korea
-                let page = 0;
-
-                while (true) {
-                    if (currentFetchId !== fetchIdRef.current) return;
-                    const { data: result, error } = await query.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
-
-                    if (error) {
-                        console.error("Supabase Query Error:", error);
-                        break; // Stop on error but keep what we have
-                    }
-
-                    const pageData = result || [];
-                    if (pageData.length === 0) break;
-
-                    allData = [...allData, ...pageData];
-
-                    if (pageData.length < PAGE_SIZE || allData.length >= MAX_FETCH) break;
-                    page++;
-                }
-
-                // De-duplicate results to avoid 'weird numbers' if some overlap occurs
-                const uniqueDataMap = new Map();
-                allData.forEach(item => {
-                    const id = item.id || item.external_id || item.hp_id;
-                    if (id && !uniqueDataMap.has(id)) {
-                        uniqueDataMap.set(id, item);
-                    } else if (!id) {
-                        // Fallback for items with no ID (shouldn't happen)
-                        allData.push(item);
-                    }
-                });
-
-                data = Array.from(uniqueDataMap.values());
-            }
-
-            if (currentFetchId !== fetchIdRef.current) return;
-
-            setItems(data);
-            updateMarkers(data);
-        } catch (error) {
-            console.error("RawSosMap: Fetch error", error);
-            if (currentFetchId === fetchIdRef.current) {
-                setItems([]);
-            }
-        } finally {
-            if (currentFetchId === fetchIdRef.current) {
-                setIsLoading(false);
-            }
-        }
-    };
-
-    const searchAddressToCoordinate = (address: string) => {
-        if (!window.naver || !window.naver.maps || !window.naver.maps.Service) return;
-
-        window.naver.maps.Service.geocode({
-            query: address
-        }, function (status: any, response: any) {
-            if (status !== window.naver.maps.Service.Status.OK) {
-                return console.log('Geocode Error');
-            }
-
-            const result = response.v2.addresses[0];
-            if (result) {
-                const point = new window.naver.maps.Point(result.x, result.y);
-                mapInstance.current.setCenter(point);
-                mapInstance.current.setZoom(15);
-            }
-        });
-    };
-
-    const getMarkerIcon = (item: any) => {
-        let label = '';
-        let borderColor = '#EF4444'; // Default Red
-        let symbol = '';
-        let symbolColor = '#EF4444';
-
-        if (selectedCategory === 'EMERGENCY') {
-            borderColor = '#EF4444'; // Red
-            symbolColor = '#EF4444';
-            symbol = '✚';
-        } else if (selectedCategory === 'PHARMACY') {
-            borderColor = '#10B981'; // Green
-            symbolColor = '#10B981';
-            symbol = '💊';
-        } else if (selectedCategory === 'ANIMAL_HOSPITAL') {
-            borderColor = '#3B82F6'; // Blue
-            symbolColor = '#3B82F6';
-            symbol = '🐶';
-        } else if (selectedCategory === 'AED') {
-            borderColor = '#F59E0B'; // Orange
-            symbolColor = '#F59E0B';
-            // Custom SVG for Heart with Lightning Bolt
-            symbol = `
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="${symbolColor}"/>
-                    <path d="M11.5 16l1-5h-2.5l1.5-5-4 5h2.5l-1.5 5h3z" fill="white" stroke="white" stroke-width="1.5"/>
-                </svg>
-            `;
+            });
         }
 
-        const content = label || symbol;
+        return () => {
+            if (mapInstance.current) {
+                naver.maps.Event.clearInstanceListeners(mapInstance.current);
+            }
+        };
+    }, [isScriptLoaded]);
 
-        return `
-            <div class="custom-marker" style="
-                width: 44px;
-                height: 44px;
-                background: white;
-                border: 4px solid ${borderColor};
-                border-radius: 50%;
-                box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: ${label ? '16px' : '22px'};
-                font-weight: 900;
-                color: ${symbolColor};
-                transition: all 0.2s ease-out;
-            ">
-                ${content}
-            </div>
-        `;
-    };
-
-    const updateMarkers = (data: any[]) => {
-        if (!window.naver || !window.naver.maps || !mapInstance.current) return;
-
+    const handleCenterToUser = () => {
+        if (!mapInstance.current || !userLocation) return;
         const naver = window.naver;
-
-        markers.current.forEach(m => m.setMap(null));
-        markers.current = [];
-        if (clusterInstance.current) {
-            clusterInstance.current.setMap(null);
-        }
-
-        const newMarkers = data.map(item => {
-            const marker = new naver.maps.Marker({
-                position: new naver.maps.LatLng(item.lat, item.lng),
-                title: item.name || item.place_name,
-                icon: {
-                    content: getMarkerIcon(item),
-                    anchor: new naver.maps.Point(20, 20)
-                }
-            });
-
-            naver.maps.Event.addListener(marker, 'click', () => {
-                setSelectedItem(item);
-                setBottomSheetOpen(true);
-            });
-
-            return marker;
-        });
-
-        markers.current = newMarkers;
-
-        if (window.MarkerClustering) {
-            // Determine Cluster Color based on Category
-            let clusterColor = 'rgba(239,68,68,0.9)'; // Default Red (Emergency)
-            let clusterColorSolid = 'rgba(239,68,68,1)';
-
-            if (selectedCategory === 'PHARMACY') {
-                clusterColor = 'rgba(16,185,129,0.9)'; // Green
-                clusterColorSolid = 'rgba(16,185,129,1)';
-            } else if (selectedCategory === 'ANIMAL_HOSPITAL') {
-                clusterColor = 'rgba(59,130,246,0.9)'; // Blue
-                clusterColorSolid = 'rgba(59,130,246,1)';
-            } else if (selectedCategory === 'AED') {
-                clusterColor = 'rgba(245,158,11,0.9)'; // Orange
-                clusterColorSolid = 'rgba(245,158,11,1)';
-            }
-
-            clusterInstance.current = new window.MarkerClustering({
-                minClusterSize: 2,
-                maxZoom: 16,
-                map: mapInstance.current,
-                markers: newMarkers,
-                disableClickZoom: false,
-                gridSize: 120,
-                icons: [
-                    {
-                        content: `<div style="cursor:pointer;width:40px;height:40px;line-height:42px;font-size:14px;color:white;text-align:center;font-weight:900;background:${clusterColor};border:3px solid white;border-radius:50%;box-shadow:0 4px 15px rgba(0,0,0,0.2);"></div>`,
-                        size: new naver.maps.Size(40, 40),
-                        anchor: new naver.maps.Point(20, 20)
-                    },
-                    {
-                        content: `<div style="cursor:pointer;width:50px;height:50px;line-height:52px;font-size:16px;color:white;text-align:center;font-weight:900;background:${clusterColorSolid};border:4px solid white;border-radius:50%;box-shadow:0 6px 20px rgba(0,0,0,0.2);"></div>`,
-                        size: new naver.maps.Size(50, 50),
-                        anchor: new naver.maps.Point(25, 25)
-                    }
-                ],
-                indexGenerator: [10, 100],
-                stylingFunction: (clusterMarker: any, count: number) => {
-                    clusterMarker.getElement().querySelector('div').textContent = count;
-                }
-            });
-        } else {
-            newMarkers.forEach(m => m.setMap(mapInstance.current));
-        }
+        mapInstance.current.setCenter(new naver.maps.LatLng(userLocation.lat, userLocation.lng));
+        mapInstance.current.setZoom(16);
     };
 
+    // Listen for custom event to center map
     useEffect(() => {
-        if (isMapLoaded) {
-            // 카테고리 변경 시 즉시 마커 클리어 (이전 카테고리 잔상 방지)
-            updateMarkers([]);
-            fetchData();
-        }
-    }, [selectedCategory, favorites, isMapLoaded]);
+        const handleCenterEvent = () => handleCenterToUser();
+        window.addEventListener('centerToUser', handleCenterEvent);
+        return () => window.removeEventListener('centerToUser', handleCenterEvent);
+    }, [isMapLoaded, userLocation]);
 
-    // Initialize map when script is loaded
+    // Update Markers when items or filters change
     useEffect(() => {
-        if (isScriptLoaded && !isMapLoaded) {
-            initMap();
-        }
-    }, [isScriptLoaded, isMapLoaded]);
+        if (isMapLoaded && items) {
+            const naver = window.naver;
 
-    // 검색/필터 변경 시 마커만 업데이트 (데이터 재로딩 없이)
-    useEffect(() => {
-        if (isMapLoaded) {
-            // Local filtering first
-            if (items.length > 0) {
-                const filtered = items.filter(item => {
-                    const name = item.name || item.place_name || '';
-                    const address = item.address || '';
-                    const roadAddress = item.road_address || '';
-                    const query = searchQuery.toLowerCase();
+            const updateMarkers = (filteredItems: any[]) => {
+                // Clear existing markers
+                markers.current.forEach(m => m.setMap(null));
+                markers.current = [];
 
-                    const matchesSearch =
-                        name.toLowerCase().includes(query) ||
-                        address.toLowerCase().includes(query) ||
-                        roadAddress.toLowerCase().includes(query);
+                if (clusterer.current) {
+                    clusterer.current.setMap(null);
+                }
 
-                    if (!matchesSearch) return false;
+                const newMarkers = filteredItems.map(item => {
+                    const status = (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL')
+                        ? getPharmacyStatus(item)
+                        : null;
 
-                    if (filterOpenNow) {
-                        if (selectedCategory === 'EMERGENCY') return true;
-                        if (item.is_24h) return true;
-
-                        if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
-                            const status = getPharmacyStatus(item);
-                            return status.status === 'open' || status.status === 'closing-soon';
+                    const marker = new naver.maps.Marker({
+                        position: new naver.maps.LatLng(item.lat, item.lng),
+                        map: mapInstance.current,
+                        title: item.name || item.place_name,
+                        icon: {
+                            content: `
+                                <div class="marker-container" style="cursor: pointer; position: relative;">
+                                    <div class="marker-outer" style="
+                                        background: ${selectedCategory === 'EMERGENCY' ? '#EF4444' :
+                                    selectedCategory === 'PHARMACY' ? '#10B981' :
+                                        selectedCategory === 'ANIMAL_HOSPITAL' ? '#3B82F6' : '#F59E0B'};
+                                        width: 32px; height: 32px; border-radius: 12px 12px 12px 0;
+                                        transform: rotate(-45deg);
+                                        display: flex; align-items: center; justify-content: center;
+                                        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+                                        border: 2px solid white;
+                                        transition: all 0.2s ease;
+                                    ">
+                                        <div style="transform: rotate(45deg); color: white; display: flex; align-items: center; justify-content: center;">
+                                            ${selectedCategory === 'EMERGENCY' ? `
+                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20"/></svg>
+                                            ` : selectedCategory === 'PHARMACY' ? `
+                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>
+                                            ` : selectedCategory === 'ANIMAL_HOSPITAL' ? `
+                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9C6 9 4 10 4 13C4 16 6 17 6 17L11 13V5Z"/><path d="M13 5L18 9C18 9 20 10 20 13C20 16 18 17 18 17L13 13V5Z"/><path d="M12 14C12 14 11 16 11 18C11 20 12 21 12 21C12 21 13 20 13 18C13 16 12 14 12 14Z"/></svg>
+                                            ` : `
+                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                                            `}
+                                        </div>
+                                    </div>
+                                    ${status ? `
+                                        <div style="position: absolute; top: -24px; left: 50%; transform: translateX(-50%);
+                                            background: white; padding: 2px 10px; border-radius: 12px; font-size: 10px; font-weight: 900;
+                                            box-shadow: 0 4px 10px rgba(0,0,0,0.15); white-space: nowrap; color: ${status.textColor};
+                                            border: 1px solid ${status.color};">
+                                            ${status.icon} ${status.message}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `,
+                            anchor: new naver.maps.Point(16, 32)
                         }
-                    }
+                    });
 
-                    return true;
+                    naver.maps.Event.addListener(marker, 'click', () => {
+                        setSelectedItem(item);
+                        setBottomSheetOpen(true);
+                        mapInstance.current.panTo(marker.getPosition());
+                    });
+
+                    return marker;
                 });
 
-                updateMarkers(filtered);
-            }
+                markers.current = newMarkers;
 
-            // If search query exists and is long enough, try geocoding
+                // Initialize Clustering
+                if (window.MarkerClustering) {
+                    const clusterColor = selectedCategory === 'EMERGENCY' ? 'rgba(239,68,68,0.95)' :
+                        selectedCategory === 'PHARMACY' ? 'rgba(16,185,129,0.95)' :
+                            selectedCategory === 'ANIMAL_HOSPITAL' ? 'rgba(59,130,246,0.95)' : 'rgba(245,158,11,0.95)';
+
+                    clusterer.current = new window.MarkerClustering({
+                        minClusterSize: 2,
+                        maxZoom: 16,
+                        map: mapInstance.current,
+                        markers: newMarkers,
+                        disableClickZoom: false,
+                        gridSize: 120,
+                        icons: [
+                            {
+                                content: `<div style="cursor:pointer;width:44px;height:44px;background:${clusterColor};border-radius:50%;border:3px solid white;box-shadow:0 4px 15px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;color:white;font-size:14px;font-weight:900;"></div>`,
+                                size: new naver.maps.Size(44, 44),
+                                anchor: new naver.maps.Point(22, 22)
+                            }
+                        ],
+                        indexGenerator: [10, 100, 200, 500, 1000],
+                        stylingFunction: (clusterHtml: any, count: number) => {
+                            const element = clusterHtml.jquery ? clusterHtml[0] : clusterHtml;
+                            if (element && typeof element === 'object') {
+                                if ('innerHTML' in element) element.innerHTML = count.toString();
+                                if (element.style) {
+                                    element.style.display = 'flex';
+                                    element.style.alignItems = 'center';
+                                    element.style.justifyContent = 'center';
+                                    element.style.color = 'white';
+                                    element.style.fontWeight = '900';
+                                }
+                            }
+                        }
+                    });
+                }
+            };
+
+            const searchAddressToCoordinate = (address: string) => {
+                naver.maps.Service.geocode({ query: address }, (status: any, response: any) => {
+                    if (status === naver.maps.Service.Status.OK) {
+                        const item = response.v2.addresses[0];
+                        const point = new naver.maps.Point(item.x, item.y);
+                        mapInstance.current.setCenter(point);
+                        mapInstance.current.setZoom(15);
+                    }
+                });
+            };
+
+            const filtered = items.filter(item => {
+                if (filterOpenNow) {
+                    if (selectedCategory === 'EMERGENCY') return true;
+                    if (item.is_24h) return true;
+                    if (selectedCategory === 'PHARMACY' || selectedCategory === 'ANIMAL_HOSPITAL') {
+                        const status = getPharmacyStatus(item);
+                        return status.status === 'open' || status.status === 'closing-soon';
+                    }
+                }
+                return true;
+            });
+
+            const limitedItems = filtered.slice(0, 1000);
+            const timer = setTimeout(() => {
+                updateMarkers(limitedItems);
+            }, 100);
+
             if (searchQuery.length > 1) {
                 if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
                 searchDebounceTimer.current = setTimeout(() => {
-                    // Only geocode if we suspect it's a location (simple heuristic or just always try if user pauses)
-                    // For now, let's try geocoding if local results are few or user explicitly types a region name
                     searchAddressToCoordinate(searchQuery);
                 }, 800);
             }
+
+            return () => clearTimeout(timer);
         }
-    }, [searchQuery, filterOpenNow, items, isMapLoaded]);
+    }, [searchQuery, filterOpenNow, items, isMapLoaded, selectedCategory]);
+
+    // Update User Location Marker
+    useEffect(() => {
+        if (!isMapLoaded || !userLocation || !window.naver || !window.naver.maps || !mapInstance.current) return;
+
+        const naver = window.naver;
+        const position = new naver.maps.LatLng(userLocation.lat, userLocation.lng);
+
+        if (!userMarker.current) {
+            userMarker.current = new naver.maps.Marker({
+                position,
+                map: mapInstance.current,
+                icon: {
+                    content: `
+                        <div style="position: relative; width: 24px; height: 24px;">
+                            <div class="user-pulse" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #3B82F6; border-radius: 50%; opacity: 0.4;"></div>
+                            <div style="position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; background: #3B82F6; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.3);"></div>
+                        </div>
+                        <style>
+                            @keyframes user-pulse-anim {
+                                0% { transform: scale(1); opacity: 0.4; }
+                                70% { transform: scale(3); opacity: 0; }
+                                100% { transform: scale(1); opacity: 0; }
+                            }
+                            .user-pulse {
+                                animation: user-pulse-anim 2s infinite;
+                            }
+                        </style>
+                    `,
+                    anchor: new naver.maps.Point(12, 12)
+                },
+                zIndex: 1000
+            });
+
+            userAccuracyCircle.current = new naver.maps.Circle({
+                map: mapInstance.current,
+                center: position,
+                radius: userLocation.accuracy,
+                fillColor: '#3B82F6',
+                fillOpacity: 0.1,
+                strokeColor: '#3B82F6',
+                strokeOpacity: 0.2,
+                strokeWeight: 1,
+                clickable: false
+            });
+        } else {
+            userMarker.current.setPosition(position);
+            if (userAccuracyCircle.current) {
+                userAccuracyCircle.current.setCenter(position);
+                userAccuracyCircle.current.setRadius(userLocation.accuracy);
+            }
+        }
+    }, [userLocation, isMapLoaded]);
+
+    // Auto-center on user location when first loaded
+    useEffect(() => {
+        if (isMapLoaded && userLocation && !hasAutoCentered.current) {
+            handleCenterToUser();
+            hasAutoCentered.current = true;
+        }
+    }, [isMapLoaded, userLocation]);
 
     return (
         <>
@@ -425,11 +308,9 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
                 src={`https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${process.env.NEXT_PUBLIC_NAVER_MAP_CLIENT_ID}&submodules=geocoder`}
                 strategy="afterInteractive"
                 onLoad={() => {
-                    console.log("RawSosMap: Naver Maps script loaded");
                     const clusterScript = document.createElement('script');
                     clusterScript.src = 'https://navermaps.github.io/maps.js.ncp/docs/js/MarkerClustering.js';
                     clusterScript.onload = () => {
-                        console.log("RawSosMap: MarkerClustering script loaded");
                         setIsScriptLoaded(true);
                     };
                     document.head.appendChild(clusterScript);
@@ -437,11 +318,26 @@ export default function RawSosMap({ searchQuery = '', filterOpenNow = false, vie
             />
             <div className="relative h-full w-full bg-slate-100">
                 <div ref={mapElement} className="h-full w-full" />
+
                 {!isMapLoaded && (
                     <div className="absolute inset-0 flex items-center justify-center bg-slate-50/50 backdrop-blur-sm">
                         <div className="flex flex-col items-center gap-4">
                             <div className="h-12 w-12 animate-spin rounded-full border-4 border-red-500 border-t-transparent"></div>
                             <p className="font-black text-slate-400 uppercase tracking-widest text-xs">Loading Map...</p>
+                        </div>
+                    </div>
+                )}
+
+                {locationMode === 'manual' && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                        <div className="relative flex flex-col items-center -translate-y-1/2">
+                            <div className="bg-slate-900 text-white px-3 py-1.5 rounded-xl text-[10px] font-black mb-2 shadow-2xl animate-bounce">
+                                이 위치로 설정
+                            </div>
+                            <div className="relative">
+                                <MapPin size={40} className="text-red-500 drop-shadow-2xl" fill="currentColor" />
+                                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-1 bg-black/20 rounded-full blur-[1px]"></div>
+                            </div>
                         </div>
                     </div>
                 )}
